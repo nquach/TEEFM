@@ -57,10 +57,9 @@ def create_data_loaders(config: VideoMAEConfig):
         transform=train_transform
     )
     
-    # For validation, we can use a subset or the same dataset
-    # In practice, you might want to split the CSV file
+    # Validation dataset from separate CSV file
     val_dataset = VideoDataset(
-        csv_file=config.csv_file,
+        csv_file=config.val_csv_file,
         num_frames=config.num_frames,
         temporal_stride=config.temporal_stride,
         transform=val_transform
@@ -115,6 +114,12 @@ def main():
         type=str,
         default='mp4_paths.csv',
         help='Path to CSV file with video paths'
+    )
+    parser.add_argument(
+        '--val_csv_file',
+        type=str,
+        default=None,
+        help='Path to CSV file with validation video paths (default: val500_2023-2024.csv)'
     )
     parser.add_argument(
         '--batch_size',
@@ -199,6 +204,8 @@ def main():
     # Override with CLI arguments
     if args.csv_file:
         config.csv_file = args.csv_file
+    if args.val_csv_file:
+        config.val_csv_file = args.val_csv_file
     if args.batch_size:
         config.batch_size = args.batch_size
     if args.num_workers:

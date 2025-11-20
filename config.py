@@ -21,6 +21,7 @@ class VideoMAEConfig:
     
     # Data parameters
     csv_file: str = 'mp4_paths.csv'
+    val_csv_file: str = 'val500_2023-2024.csv'  # Validation set CSV file
     num_frames: int = 32  # Frames to sample before downsampling
     temporal_stride: int = 2  # Stride for temporal downsampling
     final_num_frames: int = 16  # Final number of frames after downsampling
@@ -61,8 +62,17 @@ class VideoMAEConfig:
     
     # Logging and checkpointing
     log_every_n_steps: int = 50
-    val_check_interval: Optional[float] = None  # None = validate every epoch
-    check_val_every_n_epoch: int = 10  # Validate every N epochs
+    # Validation frequency controls (work together):
+    # - check_val_every_n_epoch: Controls which epochs to validate (epoch-level frequency)
+    #   Example: 10 means validate at the end of every 10th epoch
+    # - val_check_interval: Controls how often to validate WITHIN an epoch
+    #   - None: Only validate at epoch boundaries (respects check_val_every_n_epoch)
+    #   - Float (0.0-1.0): Fraction of epoch (e.g., 0.5 = twice per epoch)
+    #   - Integer: Number of batches (e.g., 100 = every 100 batches)
+    # Example: check_val_every_n_epoch=10, val_check_interval=None -> validate every 10 epochs
+    # Example: check_val_every_n_epoch=1, val_check_interval=0.5 -> validate twice per epoch
+    val_check_interval: Optional[float] = None  # None = only at epoch boundaries
+    check_val_every_n_epoch: int = 10  # Validate at the end of every N epochs
     enable_checkpointing: bool = True
     checkpoint_dir: str = 'checkpoints'
     checkpoint_filename: str = 'videomae-{epoch:02d}-{train_loss:.2f}'
