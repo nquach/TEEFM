@@ -174,7 +174,25 @@ def main():
         '--resume',
         type=str,
         default=None,
-        help='Path to checkpoint to resume from'
+        help='Path to checkpoint to resume from (resumes full training state)'
+    )
+    parser.add_argument(
+        '--pretrained',
+        type=str,
+        default=None,
+        help='Path to pretrained model weights to initialize from (.ckpt, .pth, or .pt)'
+    )
+    parser.add_argument(
+        '--load_pretrained_strict',
+        action='store_true',
+        default=None,
+        help='Use strict loading for pretrained weights (default: True)'
+    )
+    parser.add_argument(
+        '--load_pretrained_loose',
+        action='store_true',
+        default=None,
+        help='Use loose (non-strict) loading for pretrained weights (allows partial loading)'
     )
     parser.add_argument(
         '--seed',
@@ -187,6 +205,20 @@ def main():
         type=str,
         default=None,
         help='Experiment name for logging'
+    )
+    
+    # Checkpoint arguments
+    parser.add_argument(
+        '--checkpoint_dir',
+        type=str,
+        default=None,
+        help='Directory to save checkpoints (default: checkpoints)'
+    )
+    parser.add_argument(
+        '--checkpoint_prefix',
+        type=str,
+        default=None,
+        help='Prefix for checkpoint filenames (default: videomae)'
     )
     
     args = parser.parse_args()
@@ -222,8 +254,18 @@ def main():
         config.precision = args.precision
     if args.resume:
         config.resume_from_checkpoint = args.resume
+    if args.pretrained:
+        config.pretrained_checkpoint = args.pretrained
+    if args.load_pretrained_strict is not None:
+        config.load_pretrained_strict = True
+    if args.load_pretrained_loose is not None:
+        config.load_pretrained_strict = False
     if args.seed:
         config.seed = args.seed
+    if args.checkpoint_dir:
+        config.checkpoint_dir = args.checkpoint_dir
+    if args.checkpoint_prefix:
+        config.checkpoint_filename_prefix = args.checkpoint_prefix
     
     # Set experiment name
     experiment_name = args.name or f'videomae_{config.backbone}_{config.mask_ratio}mask'
@@ -256,7 +298,9 @@ def main():
         beta2=config.beta2,
         warmup_epochs=config.warmup_epochs,
         max_epochs=config.max_epochs,
-        norm_pix_loss=config.norm_pix_loss
+        norm_pix_loss=config.norm_pix_loss,
+        pretrained_checkpoint=config.pretrained_checkpoint,
+        load_pretrained_strict=config.load_pretrained_strict
     )
     
     # Create callbacks
@@ -264,13 +308,16 @@ def main():
     
     # Model checkpoint callback
     if config.enable_checkpointing:
+        # Build checkpoint filename with prefix
+        checkpoint_filename = f"{config.checkpoint_filename_prefix}-{{epoch:02d}}-{{{config.monitor_metric.replace('/', '_')}:.2f}}"
+        
         checkpoint_callback = ModelCheckpoint(
             dirpath=config.checkpoint_dir,
-            filename=config.checkpoint_filename,
+            filename=checkpoint_filename,
             monitor=config.monitor_metric,
             mode=config.mode,
             save_top_k=3,  # Save top 3 checkpoints
-            save_last=True,  # Always save last checkpoint
+            save_last=True,  # Always save last checkpoint (saved as 'last.ckpt')
             verbose=True
         )
         callbacks.append(checkpoint_callback)
@@ -314,6 +361,12 @@ def main():
     print(f"Max epochs: {config.max_epochs}")
     print(f"Devices: {config.devices}")
     print(f"Precision: {config.precision}")
+    if config.pretrained_checkpoint:
+        print(f"Pretrained checkpoint: {config.pretrained_checkpoint}")
+        print(f"Strict loading: {config.load_pretrained_strict}")
+    if config.enable_checkpointing:
+        print(f"Checkpoint directory: {config.checkpoint_dir}")
+        print(f"Checkpoint filename prefix: {config.checkpoint_filename_prefix}")
     print("="*50 + "\n")
     
     # Start training

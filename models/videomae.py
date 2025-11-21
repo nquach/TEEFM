@@ -249,6 +249,130 @@ class VideoMAE(nn.Module):
         self.num_patches = self.encoder.num_patches
         self.num_patches_per_frame = self.encoder.num_patches_per_frame
     
+    @classmethod
+    def from_pretrained(
+        cls,
+        checkpoint_path: str,
+        strict: bool = True,
+        **kwargs
+    ) -> 'VideoMAE':
+        """
+        Load VideoMAE model from pretrained checkpoint.
+        
+        Args:
+            checkpoint_path: Path to pretrained checkpoint file (.ckpt, .pth, or .pt)
+            strict: If True, requires all keys to match. If False, allows partial loading
+            **kwargs: Additional arguments to pass to VideoMAE constructor
+                     (backbone, img_size, patch_size, etc.)
+        
+        Returns:
+            VideoMAE model with loaded weights
+        """
+        # Create model instance
+        model = cls(**kwargs)
+        
+        # Load pretrained weights
+        model.load_pretrained(checkpoint_path, strict=strict)
+        
+        return model
+    
+    def load_pretrained(
+        self,
+        checkpoint_path: str,
+        strict: bool = True,
+        map_location: Optional[str] = None
+    ) -> None:
+        """
+        Load pretrained weights from checkpoint.
+        
+        Supports multiple checkpoint formats:
+        - PyTorch Lightning checkpoint (.ckpt): Extracts 'state_dict' or 'model' key
+        - PyTorch checkpoint (.pth/.pt): Direct state_dict or dict with 'state_dict' key
+        
+        Args:
+            checkpoint_path: Path to checkpoint file
+            strict: If True, requires all keys to match. If False, allows partial loading
+            map_location: Device to map weights to (e.g., 'cpu', 'cuda:0')
+        """
+        import os
+        
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        
+        print(f"Loading pretrained weights from {checkpoint_path}...")
+        
+        # Load checkpoint
+        checkpoint = torch.load(checkpoint_path, map_location=map_location)
+        
+        # Extract state dict from different checkpoint formats
+        state_dict = None
+        
+        # PyTorch Lightning checkpoint format
+        if 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+            # Remove 'model.' prefix if present (Lightning module wrapping)
+            new_state_dict = {}
+            for key, value in state_dict.items():
+                if key.startswith('model.'):
+                    new_key = key[6:]  # Remove 'model.' prefix
+                    new_state_dict[new_key] = value
+                else:
+                    new_state_dict[key] = value
+            state_dict = new_state_dict
+        # Direct state_dict or 'model' key
+        elif isinstance(checkpoint, dict) and 'model' in checkpoint:
+            state_dict = checkpoint['model']
+        # Assume it's already a state_dict
+        elif isinstance(checkpoint, dict):
+            state_dict = checkpoint
+        
+        if state_dict is None:
+            raise ValueError(
+                f"Could not extract state_dict from checkpoint. "
+                f"Checkpoint keys: {list(checkpoint.keys()) if isinstance(checkpoint, dict) else 'Not a dict'}"
+            )
+        
+        # Load state dict
+        try:
+            result = self.load_state_dict(state_dict, strict=strict)
+            
+            # When strict=False, load_state_dict returns a NamedTuple with missing_keys and unexpected_keys
+            # When strict=True, it raises RuntimeError if there are missing/unexpected keys
+            if not strict and result:
+                missing_keys = result.missing_keys
+                unexpected_keys = result.unexpected_keys
+                
+                if missing_keys:
+                    print(f"Warning: Missing keys in checkpoint: {len(missing_keys)} keys")
+                    if len(missing_keys) <= 10:
+                        print(f"  Missing keys: {missing_keys}")
+                    else:
+                        print(f"  First 10 missing keys: {missing_keys[:10]}")
+                
+                if unexpected_keys:
+                    print(f"Warning: Unexpected keys in checkpoint: {len(unexpected_keys)} keys")
+                    if len(unexpected_keys) <= 10:
+                        print(f"  Unexpected keys: {unexpected_keys}")
+                    else:
+                        print(f"  First 10 unexpected keys: {unexpected_keys[:10]}")
+            
+            print(f"Successfully loaded pretrained weights from {checkpoint_path}")
+            
+        except RuntimeError as e:
+            if strict:
+                raise RuntimeError(
+                    f"Error loading pretrained weights with strict=True. "
+                    f"Checkpoint keys may not match model architecture. "
+                    f"Try setting strict=False for partial loading. "
+                    f"Original error: {e}"
+                ) from e
+            else:
+                raise
+        except Exception as e:
+            raise RuntimeError(
+                f"Error loading pretrained weights from {checkpoint_path}: {e}"
+            ) from e
+    
     def forward(
         self,
         x: torch.Tensor,

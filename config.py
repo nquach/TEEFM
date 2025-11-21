@@ -74,13 +74,18 @@ class VideoMAEConfig:
     val_check_interval: Optional[float] = None  # None = only at epoch boundaries
     check_val_every_n_epoch: int = 10  # Validate at the end of every N epochs
     enable_checkpointing: bool = True
-    checkpoint_dir: str = 'checkpoints'
-    checkpoint_filename: str = 'videomae-{epoch:02d}-{train_loss:.2f}'
+    checkpoint_dir: str = 'checkpoints'  # Directory to save checkpoints
+    checkpoint_filename_prefix: str = 'videomae'  # Prefix for checkpoint filenames
+    # Final filename format: {prefix}-{epoch:02d}-{monitor_metric:.2f}.ckpt
     monitor_metric: str = 'train/loss'
     mode: str = 'min'  # 'min' or 'max' for checkpoint saving
     
     # Resume training
     resume_from_checkpoint: Optional[str] = None
+    
+    # Pretrained weights (for initializing model, not resuming training)
+    pretrained_checkpoint: Optional[str] = None  # Path to pretrained model weights (.ckpt, .pth, or .pt)
+    load_pretrained_strict: bool = True  # If False, allows partial weight loading when architectures don't match exactly
     
     # Other
     seed: int = 42

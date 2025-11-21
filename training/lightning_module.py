@@ -59,7 +59,10 @@ class VideoMAELightningModule(pl.LightningModule):
         # Optimizer parameters (for AdamWScheduleFree)
         beta1: float = 0.9,
         beta2: float = 0.95,
-        warmup_steps: Optional[int] = None
+        warmup_steps: Optional[int] = None,
+        # Pretrained weights
+        pretrained_checkpoint: Optional[str] = None,  # Path to pretrained checkpoint
+        load_pretrained_strict: bool = True  # Strict loading mode
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -76,6 +79,13 @@ class VideoMAELightningModule(pl.LightningModule):
             dropout=dropout,
             drop_path=drop_path
         )
+        
+        # Load pretrained weights if provided
+        if pretrained_checkpoint is not None:
+            self.model.load_pretrained(
+                pretrained_checkpoint,
+                strict=load_pretrained_strict
+            )
         
         # Initialize EVEREST masking generator
         self.masking_generator = EVERESTMaskingGenerator(
