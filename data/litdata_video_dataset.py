@@ -265,7 +265,8 @@ def optimize_video_dataset(
         fn=optimize_fn,
         inputs=items,
         output_dir=output_dir,
-        num_workers=num_workers or os.cpu_count() or 4
+        num_workers=num_workers or os.cpu_count() or 4,
+        chunk_bytes="64MB"
     )
     
     print(f"Optimization complete! Optimized data saved to {output_dir}")
