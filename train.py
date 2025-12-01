@@ -54,15 +54,18 @@ def create_data_loaders(config: VideoMAEConfig):
         csv_file=config.csv_file,
         num_frames=config.num_frames,
         temporal_stride=config.temporal_stride,
-        transform=train_transform
+        transform=train_transform,
+        subset_ratio=config.dataset_subset_ratio,
+        subset_seed=config.seed  # Use same seed for reproducibility
     )
     
-    # Validation dataset from separate CSV file
+    # Validation dataset from separate CSV file (no subset sampling for validation)
     val_dataset = VideoDataset(
         csv_file=config.val_csv_file,
         num_frames=config.num_frames,
         temporal_stride=config.temporal_stride,
-        transform=val_transform
+        transform=val_transform,
+        subset_ratio=1.0  # Always use full validation set
     )
     
     # Create data loaders
@@ -72,6 +75,8 @@ def create_data_loaders(config: VideoMAEConfig):
         shuffle=True,
         num_workers=config.num_workers,
         pin_memory=config.pin_memory,
+        persistent_workers=config.persistent_workers if config.num_workers > 0 else False,
+        prefetch_factor=config.prefetch_factor if config.num_workers > 0 else 2,
         drop_last=True  # Drop last incomplete batch
     )
     
@@ -81,6 +86,8 @@ def create_data_loaders(config: VideoMAEConfig):
         shuffle=False,
         num_workers=config.num_workers,
         pin_memory=config.pin_memory,
+        persistent_workers=config.persistent_workers if config.num_workers > 0 else False,
+        prefetch_factor=config.prefetch_factor if config.num_workers > 0 else 2,
         drop_last=False
     )
     
@@ -152,6 +159,12 @@ def main():
         type=float,
         default=None,
         help='Masking ratio for EVEREST'
+    )
+    parser.add_argument(
+        '--dataset_subset_ratio',
+        type=float,
+        default=None,
+        help='Ratio of training dataset to use (1.0 = use all, 0.5 = use 50%%, default: 1.0)'
     )
     
     # Hardware arguments
@@ -248,6 +261,8 @@ def main():
         config.learning_rate = args.learning_rate
     if args.mask_ratio:
         config.mask_ratio = args.mask_ratio
+    if args.dataset_subset_ratio is not None:
+        config.dataset_subset_ratio = args.dataset_subset_ratio
     if args.devices:
         config.devices = args.devices
     if args.precision:

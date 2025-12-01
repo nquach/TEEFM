@@ -11,12 +11,13 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
-from torchvision.io import read_video
+from torchvision.io import read_video, VideoReader
 import numpy as np
 import random
+from functools import lru_cache
 
 
 class VideoDataset(Dataset):
@@ -42,12 +43,17 @@ class VideoDataset(Dataset):
         csv_file: str,
         num_frames: int = 32,
         temporal_stride: int = 2,
-        transform: Optional[transforms.Compose] = None
+        transform: Optional[transforms.Compose] = None,
+        cache_video_metadata: bool = True,
+        subset_ratio: float = 1.0,
+        subset_seed: Optional[int] = None
     ):
         self.csv_file = csv_file
         self.num_frames = num_frames
         self.temporal_stride = temporal_stride
         self.transform = transform
+        self.cache_video_metadata = cache_video_metadata
+        self.subset_ratio = subset_ratio
         
         # Read video paths from CSV file
         # CSV format: one path per line (no header)
@@ -63,7 +69,46 @@ class VideoDataset(Dataset):
         if len(self.video_paths) == 0:
             raise ValueError(f"No valid video files found in {csv_file}")
         
+        # Randomly sample a subset if ratio < 1.0
+        if self.subset_ratio < 1.0:
+            if subset_seed is not None:
+                random.seed(subset_seed)
+                np.random.seed(subset_seed)
+            
+            num_samples = max(1, int(len(self.video_paths) * self.subset_ratio))
+            self.video_paths = random.sample(self.video_paths, num_samples)
+            print(f"Randomly sampled {num_samples} videos ({self.subset_ratio*100:.1f}%) from {len(df)} total paths")
+        
+        # Cache for video metadata (number of frames)
+        self._video_metadata_cache: Dict[str, int] = {}
+        
         print(f"Loaded {len(self.video_paths)} video paths from {csv_file}")
+    
+    def _get_video_frame_count(self, video_path: str) -> int:
+        """
+        Get the number of frames in a video file.
+        Uses caching to avoid repeated reads.
+        """
+        if video_path in self._video_metadata_cache:
+            return self._video_metadata_cache[video_path]
+        
+        try:
+            # Use VideoReader to get frame count without loading all frames
+            vr = VideoReader(video_path, "video")
+            frame_count = len(vr)
+            self._video_metadata_cache[video_path] = frame_count
+            return frame_count
+        except Exception as e:
+            # Fallback: load video to get frame count
+            try:
+                video, _, _ = read_video(video_path, pts_unit='sec', output_format='TCHW')
+                frame_count = video.shape[0]
+                self._video_metadata_cache[video_path] = frame_count
+                return frame_count
+            except Exception:
+                # If we can't read the video, return a default
+                print(f"Warning: Could not read video {video_path}, using default frame count")
+                return self.num_frames
     
     def __len__(self) -> int:
         """Return the number of videos in the dataset."""
@@ -85,36 +130,67 @@ class VideoDataset(Dataset):
         video_path = self.video_paths[idx]
         
         try:
-            # Load video using torchvision
-            # Returns: (T, H, W, C) tensor with values in [0, 255]
-            video, audio, info = read_video(
-                video_path,
-                pts_unit='sec',
-                output_format='TCHW'  # Time, Channels, Height, Width
-            )
+            # Get video frame count (cached)
+            num_frames_total = self._get_video_frame_count(video_path)
+            
+            # Randomly sample starting frame for 32 consecutive frames
+            max_start = max(0, num_frames_total - self.num_frames)
+            if max_start <= 0:
+                start_frame = 0
+                # Need to load all frames if video is short
+                end_frame = min(num_frames_total, self.num_frames)
+            else:
+                start_frame = torch.randint(0, max_start + 1, (1,)).item()
+                end_frame = start_frame + self.num_frames
+            
+            # Load video frames
+            # Note: read_video loads entire video, but we'll optimize by:
+            # 1. Caching metadata (already done above)
+            # 2. Using VideoReader when possible for selective frame loading
+            try:
+                # Try VideoReader for more efficient frame loading
+                vr = VideoReader(video_path, "video")
+                vr.seek(start_frame)
+                
+                # Read consecutive frames
+                frames = []
+                for _ in range(min(end_frame - start_frame, self.num_frames)):
+                    frame_data = vr.next()
+                    if frame_data is None:
+                        break
+                    # frame_data['data'] is (H, W, C), convert to (C, H, W)
+                    frame_tensor = frame_data['data'].permute(2, 0, 1)
+                    frames.append(frame_tensor)
+                
+                if len(frames) < self.num_frames:
+                    # Pad with last frame if needed
+                    last_frame = frames[-1] if frames else torch.zeros(3, 224, 224)
+                    while len(frames) < self.num_frames:
+                        frames.append(last_frame)
+                
+                video = torch.stack(frames[:self.num_frames], dim=0)  # (num_frames, C, H, W)
+                
+            except Exception:
+                # Fallback: use read_video (loads entire video, but more compatible)
+                video, audio, info = read_video(
+                    video_path,
+                    pts_unit='sec',
+                    output_format='TCHW'  # Time, Channels, Height, Width
+                )
+                
+                # Extract the frame range we need
+                if num_frames_total < self.num_frames:
+                    # If video is shorter, pad by repeating last frame
+                    padding = self.num_frames - num_frames_total
+                    last_frame = video[-1:].repeat(padding, 1, 1, 1)
+                    video = torch.cat([video, last_frame], dim=0)
+                    start_frame = 0
+                    end_frame = self.num_frames
+                else:
+                    video = video[start_frame:end_frame]
             
             # Convert to (T, H, W, C) format for easier processing
             video = video.permute(0, 2, 3, 1)  # (T, H, W, C)
-            
-            num_frames_total = video.shape[0]
-            
-            # Ensure we have enough frames
-            if num_frames_total < self.num_frames:
-                # If video is shorter than required, pad by repeating last frame
-                padding = self.num_frames - num_frames_total
-                last_frame = video[-1:].repeat(padding, 1, 1, 1)
-                video = torch.cat([video, last_frame], dim=0)
-                num_frames_total = video.shape[0]
-            
-            # Randomly sample starting frame for 32 consecutive frames
-            max_start = num_frames_total - self.num_frames
-            if max_start < 0:
-                start_frame = 0
-            else:
-                start_frame = torch.randint(0, max_start + 1, (1,)).item()
-            
-            # Extract 32 consecutive frames
-            video = video[start_frame:start_frame + self.num_frames]
             
             # Temporally downsample with stride 2 to get 16 frames
             video = video[::self.temporal_stride]  # Shape: (16, 224, 224, 3)

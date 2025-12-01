@@ -6,6 +6,7 @@ hyperparameter tuning. Modify the default values or create new configurations
 as needed.
 """
 
+import os
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -22,13 +23,16 @@ class VideoMAEConfig:
     # Data parameters
     csv_file: str = 'mp4_paths.csv'
     val_csv_file: str = 'val500_2023-2024.csv'  # Validation set CSV file
+    dataset_subset_ratio: float = 1.0  # Ratio of dataset to use (1.0 = use all, 0.5 = use 50%, off by default)
     num_frames: int = 32  # Frames to sample before downsampling
     temporal_stride: int = 2  # Stride for temporal downsampling
     final_num_frames: int = 16  # Final number of frames after downsampling
     img_size: int = 224
     batch_size: int = 8
-    num_workers: int = 4
+    num_workers: int = os.cpu_count() or 4  # Use all available CPUs, fallback to 4 if count unavailable
     pin_memory: bool = True
+    persistent_workers: bool = True  # Keep workers alive between epochs (faster)
+    prefetch_factor: int = 2  # Number of batches to prefetch per worker
     
     # Model parameters
     backbone: str = 'ViT-S'  # Options: 'ViT-S', 'ViT-B', 'ViT-L'
@@ -100,6 +104,8 @@ class VideoMAEConfig:
             f"mask_ratio must be between 0 and 1, got {self.mask_ratio}"
         assert 0 <= self.motion_weight <= 1, \
             f"motion_weight must be between 0 and 1, got {self.motion_weight}"
+        assert 0 < self.dataset_subset_ratio <= 1, \
+            f"dataset_subset_ratio must be between 0 and 1, got {self.dataset_subset_ratio}"
         assert self.final_num_frames == self.num_frames // self.temporal_stride, \
             f"final_num_frames ({self.final_num_frames}) should equal " \
             f"num_frames // temporal_stride ({self.num_frames // self.temporal_stride})"
