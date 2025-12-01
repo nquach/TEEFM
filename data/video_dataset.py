@@ -14,10 +14,18 @@ from torch.utils.data import Dataset
 from typing import Optional, Tuple, List, Dict
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
-from torchvision.io import read_video, VideoReader
 import numpy as np
 import random
 from functools import lru_cache
+
+try:
+    from torchcodec import read_video
+    TORCHCODEC_AVAILABLE = True
+except ImportError:
+    TORCHCODEC_AVAILABLE = False
+    # Fallback to torchvision if torchcodec not available
+    from torchvision.io import read_video, VideoReader
+    print("Warning: torchcodec not available. Install with: pip install torchcodec. Falling back to torchvision.")
 
 
 class VideoDataset(Dataset):
@@ -90,16 +98,27 @@ class VideoDataset(Dataset):
             return self._video_metadata_cache[video_path]
         
         try:
-            # Use VideoReader to get frame count without loading all frames
-            vr = VideoReader(video_path, "video")
-            frame_count = len(vr)
+            if TORCHCODEC_AVAILABLE:
+                # Use torchcodec to get frame count
+                # torchcodec read_video can read metadata without loading all frames
+                video, _, info = read_video(video_path)
+                frame_count = video.shape[0] if video is not None else 0
+                if frame_count == 0 and info is not None:
+                    # Try to get frame count from info if available
+                    frame_count = info.get('num_frames', self.num_frames)
+            else:
+                # Fallback to torchvision VideoReader
+                from torchvision.io import VideoReader
+                vr = VideoReader(video_path, "video")
+                frame_count = len(vr)
+            
             self._video_metadata_cache[video_path] = frame_count
             return frame_count
         except Exception as e:
-            # Fallback: load video to get frame count
+            # Fallback: try to load video to get frame count
             try:
-                video, _, _ = read_video(video_path, pts_unit='sec', output_format='TCHW')
-                frame_count = video.shape[0]
+                video, _, _ = read_video(video_path)
+                frame_count = video.shape[0] if video is not None else self.num_frames
                 self._video_metadata_cache[video_path] = frame_count
                 return frame_count
             except Exception:
@@ -140,40 +159,14 @@ class VideoDataset(Dataset):
                 start_frame = torch.randint(0, max_start + 1, (1,)).item()
                 end_frame = start_frame + self.num_frames
             
-            # Load video frames
-            # Note: read_video loads entire video, but we'll optimize by:
-            # 1. Caching metadata (already done above)
-            # 2. Using VideoReader when possible for selective frame loading
-            try:
-                # Try VideoReader for more efficient frame loading
-                vr = VideoReader(video_path, "video")
-                vr.seek(start_frame)
+            # Load video frames using torchcodec (faster than torchvision)
+            if TORCHCODEC_AVAILABLE:
+                # Use torchcodec read_video
+                # torchcodec read_video returns (T, H, W, C) format by default
+                video, _, _ = read_video(video_path)
                 
-                # Read consecutive frames
-                frames = []
-                for _ in range(min(end_frame - start_frame, self.num_frames)):
-                    frame_data = vr.next()
-                    if frame_data is None:
-                        break
-                    # frame_data['data'] is (H, W, C), convert to (C, H, W)
-                    frame_tensor = frame_data['data'].permute(2, 0, 1)
-                    frames.append(frame_tensor)
-                
-                if len(frames) < self.num_frames:
-                    # Pad with last frame if needed
-                    last_frame = frames[-1] if frames else torch.zeros(3, 224, 224)
-                    while len(frames) < self.num_frames:
-                        frames.append(last_frame)
-                
-                video = torch.stack(frames[:self.num_frames], dim=0)  # (num_frames, C, H, W)
-                
-            except Exception:
-                # Fallback: use read_video (loads entire video, but more compatible)
-                video, audio, info = read_video(
-                    video_path,
-                    pts_unit='sec',
-                    output_format='TCHW'  # Time, Channels, Height, Width
-                )
+                if video is None or video.shape[0] == 0:
+                    raise ValueError(f"Failed to load video: {video_path}")
                 
                 # Extract the frame range we need
                 if num_frames_total < self.num_frames:
@@ -185,9 +178,56 @@ class VideoDataset(Dataset):
                     end_frame = self.num_frames
                 else:
                     video = video[start_frame:end_frame]
+                
+                # Ensure format is (T, H, W, C)
+                if video.dim() == 4 and video.shape[1] == 3:
+                    # Convert from (T, C, H, W) to (T, H, W, C)
+                    video = video.permute(0, 2, 3, 1)
+            else:
+                # Fallback to torchvision
+                try:
+                    from torchvision.io import VideoReader
+                    vr = VideoReader(video_path, "video")
+                    vr.seek(start_frame)
+                    
+                    frames = []
+                    for _ in range(min(end_frame - start_frame, self.num_frames)):
+                        frame_data = vr.next()
+                        if frame_data is None:
+                            break
+                        frame_tensor = frame_data['data'].permute(2, 0, 1)  # (C, H, W)
+                        frames.append(frame_tensor)
+                    
+                    if len(frames) < self.num_frames:
+                        last_frame = frames[-1] if frames else torch.zeros(3, 224, 224)
+                        while len(frames) < self.num_frames:
+                            frames.append(last_frame)
+                    
+                    video = torch.stack(frames[:self.num_frames], dim=0)  # (num_frames, C, H, W)
+                    video = video.permute(0, 2, 3, 1)  # (num_frames, H, W, C)
+                except Exception:
+                    # Final fallback: use read_video
+                    video, _, _ = read_video(
+                        video_path,
+                        pts_unit='sec',
+                        output_format='TCHW'
+                    )
+                    
+                    if num_frames_total < self.num_frames:
+                        padding = self.num_frames - num_frames_total
+                        last_frame = video[-1:].repeat(padding, 1, 1, 1)
+                        video = torch.cat([video, last_frame], dim=0)
+                        start_frame = 0
+                        end_frame = self.num_frames
+                    else:
+                        video = video[start_frame:end_frame]
+                    
+                    video = video.permute(0, 2, 3, 1)  # (T, H, W, C)
             
-            # Convert to (T, H, W, C) format for easier processing
-            video = video.permute(0, 2, 3, 1)  # (T, H, W, C)
+            # Ensure video is in (T, H, W, C) format
+            if video.dim() == 4 and video.shape[1] == 3:
+                # Convert from (T, C, H, W) to (T, H, W, C) if needed
+                video = video.permute(0, 2, 3, 1)
             
             # Temporally downsample with stride 2 to get 16 frames
             video = video[::self.temporal_stride]  # Shape: (16, 224, 224, 3)
