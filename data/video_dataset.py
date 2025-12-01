@@ -13,8 +13,10 @@ import torch.nn as nn
 from torch.utils.data import Dataset
 from typing import Optional, Tuple, List
 import torchvision.transforms as transforms
+import torchvision.transforms.functional as F
 from torchvision.io import read_video
 import numpy as np
+import random
 
 
 class VideoDataset(Dataset):
@@ -139,30 +141,120 @@ class VideoDataset(Dataset):
             )
 
 
+class MultiscaleCrop:
+    """
+    Multiscale cropping augmentation for videos.
+    
+    Applies the same random crop (location and scale) to all frames,
+    preserving temporal coherence. Crops a random region and resizes
+    it back to the target size.
+    
+    Args:
+        target_size (int): Target size after cropping and resizing (default: 224)
+        scale_range (Tuple[float, float]): Range of scale factors for cropping
+            (default: (0.8, 1.0)). Crop size = scale * target_size
+    """
+    
+    def __init__(
+        self,
+        target_size: int = 224,
+        scale_range: Tuple[float, float] = (0.8, 1.0)
+    ):
+        self.target_size = target_size
+        self.scale_range = scale_range
+    
+    def __call__(self, video: torch.Tensor) -> torch.Tensor:
+        """
+        Apply multiscale crop to video.
+        
+        Applies the same random crop (location and scale) to all frames,
+        preserving temporal coherence.
+        
+        Args:
+            video: Video tensor of shape (T, H, W, C) with values in [0, 1]
+            
+        Returns:
+            Cropped and resized video tensor of shape (T, target_size, target_size, C)
+        """
+        T, H, W, C = video.shape
+        
+        # Randomly select scale factor
+        scale = random.uniform(self.scale_range[0], self.scale_range[1])
+        
+        # Compute crop size
+        crop_size = int(scale * self.target_size)
+        crop_size = max(crop_size, self.target_size // 2)  # Ensure minimum size
+        crop_size = min(crop_size, min(H, W))  # Don't exceed original size
+        
+        # Randomly select crop location (top-left corner)
+        max_top = max(0, H - crop_size)
+        max_left = max(0, W - crop_size)
+        top = random.randint(0, max_top) if max_top > 0 else 0
+        left = random.randint(0, max_left) if max_left > 0 else 0
+        
+        # Crop all frames with the same parameters
+        # video: (T, H, W, C)
+        cropped_video = video[:, top:top+crop_size, left:left+crop_size, :]
+        
+        # Resize all frames to target size
+        # Convert to (T, C, H, W) for easier processing
+        cropped_video = cropped_video.permute(0, 3, 1, 2)  # (T, C, H, W)
+        
+        # Resize all frames at once for efficiency
+        # Reshape to (T*C, 1, H, W) for batch resize
+        T_orig, C_orig, H_orig, W_orig = cropped_video.shape
+        cropped_flat = cropped_video.reshape(T_orig * C_orig, 1, H_orig, W_orig)
+        
+        # Resize: (T*C, 1, H, W) -> (T*C, 1, target_size, target_size)
+        resized_flat = F.resize(
+            cropped_flat,
+            size=(self.target_size, self.target_size),
+            interpolation=F.InterpolationMode.BILINEAR
+        )
+        
+        # Reshape back: (T*C, 1, target_size, target_size) -> (T, C, target_size, target_size)
+        resized = resized_flat.reshape(T_orig, C_orig, self.target_size, self.target_size)
+        
+        # Convert back to (T, H, W, C)
+        resized = resized.permute(0, 2, 3, 1)
+        
+        return resized
+
+
 def get_video_transforms(
     mode: str = 'train',
-    normalize: bool = True
-) -> transforms.Compose:
+    normalize: bool = True,
+    use_multiscale_crop: bool = True,
+    crop_scale_range: Tuple[float, float] = (0.8, 1.0)
+) -> Optional[transforms.Compose]:
     """
     Get video transforms for data augmentation.
     
     Args:
         mode (str): 'train' for training augmentations, 'val' for validation
         normalize (bool): Whether to normalize to ImageNet statistics
+        use_multiscale_crop (bool): Whether to use multiscale cropping (default: True)
+        crop_scale_range (Tuple[float, float]): Scale range for multiscale cropping
         
     Returns:
-        transforms.Compose: Composition of transforms
+        transforms.Compose: Composition of transforms, or None if no transforms
     """
+    transform_list = []
+    
     if mode == 'train':
         # Training augmentations
-        transform_list = [
-            # Random horizontal flip (applied frame-wise)
-            # Note: For video, we might want to apply same flip to all frames
-            # This is a simple implementation - can be enhanced
-        ]
+        if use_multiscale_crop:
+            # Multiscale cropping with temporal coherence
+            # Same crop location and scale applied to all frames
+            transform_list.append(
+                MultiscaleCrop(
+                    target_size=224,
+                    scale_range=crop_scale_range
+                )
+            )
     else:
         # Validation: no augmentation
-        transform_list = []
+        pass
     
     if normalize:
         # ImageNet normalization statistics
