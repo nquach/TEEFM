@@ -300,8 +300,7 @@ class VideoMAELightningModule(pl.LightningModule):
                 self.parameters(),
                 lr=self.learning_rate,
                 weight_decay=self.weight_decay,
-                beta1=self.beta1,
-                beta2=self.beta2
+                betas=(self.beta1, self.beta2)
             )
             
             # AdamWScheduleFree doesn't need a scheduler, but we can add warmup
