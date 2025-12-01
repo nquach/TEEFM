@@ -301,6 +301,26 @@ def main():
         help='Prefix for checkpoint filenames (default: videomae)'
     )
     
+    # LitData arguments
+    parser.add_argument(
+        '--use_litdata',
+        action='store_true',
+        default=None,
+        help='Use litdata streaming for faster data loading (requires preprocessing)'
+    )
+    parser.add_argument(
+        '--no_litdata',
+        action='store_true',
+        default=False,
+        help='Disable litdata streaming (use regular DataLoader)'
+    )
+    parser.add_argument(
+        '--optimize_data',
+        action='store_true',
+        default=False,
+        help='Optimize dataset using litdata (preprocessing step, run before training)'
+    )
+    
     args = parser.parse_args()
     
     # Load configuration
@@ -348,7 +368,9 @@ def main():
         config.checkpoint_dir = args.checkpoint_dir
     if args.checkpoint_prefix:
         config.checkpoint_filename_prefix = args.checkpoint_prefix
-    if args.use_litdata is not None:
+    if args.no_litdata:
+        config.use_litdata = False
+    elif args.use_litdata is not None:
         config.use_litdata = args.use_litdata
     
     # Handle data optimization (preprocessing step)
