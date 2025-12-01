@@ -5,8 +5,9 @@ This script sets up and runs training using PyTorch Lightning.
 Supports single-GPU and multi-GPU training automatically.
 
 Usage:
-    python train.py --config config.py --backbone ViT-S
+    python train.py --backbone ViT-S
     python train.py --backbone ViT-B --batch_size 4
+    python train.py --pretrained path/to/checkpoint.ckpt
 """
 
 import os
@@ -18,18 +19,6 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 
 from data import VideoDataset, get_video_transforms
-try:
-    from data.litdata_video_dataset import (
-        LitDataVideoDataset,
-        optimize_video_dataset,
-        StreamingDataLoader,
-        LITDATA_AVAILABLE
-    )
-except ImportError:
-    LITDATA_AVAILABLE = False
-    LitDataVideoDataset = None
-    optimize_video_dataset = None
-    StreamingDataLoader = None
 from training import VideoMAELightningModule
 from config import VideoMAEConfig, get_vit_s_config, get_vit_b_config, get_vit_l_config
 
@@ -49,114 +38,54 @@ def create_data_loaders(config: VideoMAEConfig):
     """
     Create training and validation data loaders.
     
-    Supports both regular PyTorch DataLoader and litdata StreamingDataLoader.
-    
     Args:
         config: Configuration object
         
     Returns:
         Tuple of (train_loader, val_loader)
     """
-    # Get transforms (only normalization for litdata, augmentations done during optimization)
-    train_transform = get_video_transforms(mode='train', normalize=False, use_multiscale_crop=False)
+    # Get transforms
+    train_transform = get_video_transforms(mode='train', normalize=False)
     val_transform = get_video_transforms(mode='val', normalize=False)
     
-    if config.use_litdata:
-        if not LITDATA_AVAILABLE:
-            raise ImportError(
-                "litdata is required but not installed. "
-                "Install with: pip install litdata\n"
-                "Or set use_litdata=False in config."
-            )
-        
-        # Check if optimized data exists
-        if not os.path.exists(config.litdata_output_dir):
-            raise ValueError(
-                f"Optimized data not found at {config.litdata_output_dir}. "
-                f"Please run optimize_video_dataset() first or set use_litdata=False."
-            )
-        
-        if not os.path.exists(config.litdata_val_output_dir):
-            raise ValueError(
-                f"Optimized validation data not found at {config.litdata_val_output_dir}. "
-                f"Please run optimize_video_dataset() for validation set first."
-            )
-        
-        # Use litdata streaming datasets
-        print(f"Using litdata streaming from {config.litdata_output_dir}")
-        train_dataset = LitDataVideoDataset(
-            input_dir=config.litdata_output_dir,
-            num_frames=config.num_frames,
-            temporal_stride=config.temporal_stride,
-            transform=train_transform
-        )
-        
-        val_dataset = LitDataVideoDataset(
-            input_dir=config.litdata_val_output_dir,
-            num_frames=config.num_frames,
-            temporal_stride=config.temporal_stride,
-            transform=val_transform
-        )
-        
-        # Use StreamingDataLoader
-        train_loader = StreamingDataLoader(
-            train_dataset,
-            batch_size=config.batch_size,
-            shuffle=True,
-            num_workers=config.num_workers,
-            pin_memory=config.pin_memory,
-            drop_last=True
-        )
-        
-        val_loader = StreamingDataLoader(
-            val_dataset,
-            batch_size=config.batch_size,
-            shuffle=False,
-            num_workers=config.num_workers,
-            pin_memory=config.pin_memory,
-            drop_last=False
-        )
-        
-    else:
-        # Use regular PyTorch datasets and loaders
-        train_dataset = VideoDataset(
-            csv_file=config.csv_file,
-            num_frames=config.num_frames,
-            temporal_stride=config.temporal_stride,
-            transform=train_transform,
-            subset_ratio=config.dataset_subset_ratio,
-            subset_seed=config.seed
-        )
-        
-        val_dataset = VideoDataset(
-            csv_file=config.val_csv_file,
-            num_frames=config.num_frames,
-            temporal_stride=config.temporal_stride,
-            transform=val_transform,
-            subset_ratio=1.0
-        )
-        
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=config.batch_size,
-            shuffle=True,
-            num_workers=config.num_workers,
-            pin_memory=config.pin_memory,
-            persistent_workers=config.persistent_workers if config.num_workers > 0 else False,
-            prefetch_factor=config.prefetch_factor if config.num_workers > 0 else 2,
-            drop_last=True
-        )
-        
-        val_loader = DataLoader(
-            val_dataset,
-            batch_size=config.batch_size,
-            shuffle=False,
-            num_workers=config.num_workers,
-            pin_memory=config.pin_memory,
-            persistent_workers=config.persistent_workers if config.num_workers > 0 else False,
-            prefetch_factor=config.prefetch_factor if config.num_workers > 0 else 2,
-            drop_last=False
-        )
+    # Create datasets
+    train_dataset = VideoDataset(
+        csv_file=config.csv_file,
+        num_frames=config.num_frames,
+        temporal_stride=config.temporal_stride,
+        transform=train_transform
+    )
+    
+    # Validation dataset from separate CSV file
+    val_dataset = VideoDataset(
+        csv_file=config.val_csv_file,
+        num_frames=config.num_frames,
+        temporal_stride=config.temporal_stride,
+        transform=val_transform
+    )
+    
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config.batch_size,
+        shuffle=True,
+        num_workers=config.num_workers,
+        pin_memory=config.pin_memory,
+        persistent_workers=config.persistent_workers if config.num_workers > 0 else False,
+        prefetch_factor=config.prefetch_factor if config.num_workers > 0 else 2,
+        drop_last=True  # Drop last incomplete batch
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config.batch_size,
+        shuffle=False,
+        num_workers=config.num_workers,
+        pin_memory=config.pin_memory,
+        persistent_workers=config.persistent_workers if config.num_workers > 0 else False,
+        prefetch_factor=config.prefetch_factor if config.num_workers > 0 else 2,
+        drop_last=False
+    )
     
     return train_loader, val_loader
 
@@ -164,14 +93,6 @@ def create_data_loaders(config: VideoMAEConfig):
 def main():
     """Main training function."""
     parser = argparse.ArgumentParser(description='Train VideoMAE with EVEREST masking')
-    
-    # Configuration
-    parser.add_argument(
-        '--config',
-        type=str,
-        default=None,
-        help='Path to config file (optional, can override with CLI args)'
-    )
     
     # Model arguments
     parser.add_argument(
@@ -186,14 +107,14 @@ def main():
     parser.add_argument(
         '--csv_file',
         type=str,
-        default='mp4_paths.csv',
+        default=None,
         help='Path to CSV file with video paths'
     )
     parser.add_argument(
         '--val_csv_file',
         type=str,
         default=None,
-        help='Path to CSV file with validation video paths (default: val500_2023-2024.csv)'
+        help='Path to CSV file with validation video paths'
     )
     parser.add_argument(
         '--batch_size',
@@ -227,12 +148,6 @@ def main():
         default=None,
         help='Masking ratio for EVEREST'
     )
-    parser.add_argument(
-        '--dataset_subset_ratio',
-        type=float,
-        default=None,
-        help='Ratio of training dataset to use (1.0 = use all, 0.5 = use 50%%, default: 1.0)'
-    )
     
     # Hardware arguments
     parser.add_argument(
@@ -247,6 +162,20 @@ def main():
         choices=['32', '16-mixed', 'bf16-mixed'],
         default=None,
         help='Training precision'
+    )
+    
+    # Checkpoint arguments
+    parser.add_argument(
+        '--checkpoint_dir',
+        type=str,
+        default=None,
+        help='Directory to save checkpoints'
+    )
+    parser.add_argument(
+        '--checkpoint_prefix',
+        type=str,
+        default=None,
+        help='Prefix for checkpoint filenames'
     )
     
     # Other arguments
@@ -275,6 +204,12 @@ def main():
         help='Use loose (non-strict) loading for pretrained weights (allows partial loading)'
     )
     parser.add_argument(
+        '--log_gradient_norm',
+        action='store_true',
+        default=None,
+        help='Log L2 norm of full loss gradient (off by default)'
+    )
+    parser.add_argument(
         '--seed',
         type=int,
         default=None,
@@ -285,40 +220,6 @@ def main():
         type=str,
         default=None,
         help='Experiment name for logging'
-    )
-    
-    # Checkpoint arguments
-    parser.add_argument(
-        '--checkpoint_dir',
-        type=str,
-        default=None,
-        help='Directory to save checkpoints (default: checkpoints)'
-    )
-    parser.add_argument(
-        '--checkpoint_prefix',
-        type=str,
-        default=None,
-        help='Prefix for checkpoint filenames (default: videomae)'
-    )
-    
-    # LitData arguments
-    parser.add_argument(
-        '--use_litdata',
-        action='store_true',
-        default=None,
-        help='Use litdata streaming for faster data loading (requires preprocessing)'
-    )
-    parser.add_argument(
-        '--no_litdata',
-        action='store_true',
-        default=False,
-        help='Disable litdata streaming (use regular DataLoader)'
-    )
-    parser.add_argument(
-        '--optimize_data',
-        action='store_true',
-        default=False,
-        help='Optimize dataset using litdata (preprocessing step, run before training)'
     )
     
     args = parser.parse_args()
@@ -348,8 +249,6 @@ def main():
         config.learning_rate = args.learning_rate
     if args.mask_ratio:
         config.mask_ratio = args.mask_ratio
-    if args.dataset_subset_ratio is not None:
-        config.dataset_subset_ratio = args.dataset_subset_ratio
     if args.devices:
         config.devices = args.devices
     if args.precision:
@@ -362,54 +261,14 @@ def main():
         config.load_pretrained_strict = True
     if args.load_pretrained_loose is not None:
         config.load_pretrained_strict = False
+    if args.log_gradient_norm is not None:
+        config.log_gradient_norm = args.log_gradient_norm
     if args.seed:
         config.seed = args.seed
     if args.checkpoint_dir:
         config.checkpoint_dir = args.checkpoint_dir
     if args.checkpoint_prefix:
         config.checkpoint_filename_prefix = args.checkpoint_prefix
-    if args.no_litdata:
-        config.use_litdata = False
-    elif args.use_litdata is not None:
-        config.use_litdata = args.use_litdata
-    
-    # Handle data optimization (preprocessing step)
-    if args.optimize_data:
-        print("Optimizing dataset with litdata...")
-        if not LITDATA_AVAILABLE:
-            raise ImportError("litdata is required. Install with: pip install litdata")
-        
-        # Optimize training dataset
-        optimize_video_dataset(
-            csv_file=config.csv_file,
-            output_dir=config.litdata_output_dir,
-            num_frames=config.num_frames,
-            temporal_stride=config.temporal_stride,
-            img_size=config.img_size,
-            use_multiscale_crop=True,  # Apply augmentation during optimization
-            crop_scale_range=(0.8, 1.0),
-            subset_ratio=config.dataset_subset_ratio,
-            subset_seed=config.seed,
-            num_workers=config.num_workers
-        )
-        
-        # Optimize validation dataset
-        optimize_video_dataset(
-            csv_file=config.val_csv_file,
-            output_dir=config.litdata_val_output_dir,
-            num_frames=config.num_frames,
-            temporal_stride=config.temporal_stride,
-            img_size=config.img_size,
-            use_multiscale_crop=False,  # No augmentation for validation
-            crop_scale_range=(0.8, 1.0),
-            subset_ratio=1.0,
-            subset_seed=None,
-            num_workers=config.num_workers
-        )
-        
-        print("Data optimization complete!")
-        print("You can now run training with --use_litdata flag")
-        return
     
     # Set experiment name
     experiment_name = args.name or f'videomae_{config.backbone}_{config.mask_ratio}mask'
@@ -504,7 +363,7 @@ def main():
     print(f"Learning rate: {config.learning_rate}")
     print(f"Mask ratio: {config.mask_ratio}")
     print(f"Max epochs: {config.max_epochs}")
-    print(f"Devices: {config.devices}")
+    print(f"Devices: {config.devices if config.devices is not None else 'auto'}")
     print(f"Precision: {config.precision}")
     if config.pretrained_checkpoint:
         print(f"Pretrained checkpoint: {config.pretrained_checkpoint}")
@@ -512,6 +371,8 @@ def main():
     if config.enable_checkpointing:
         print(f"Checkpoint directory: {config.checkpoint_dir}")
         print(f"Checkpoint filename prefix: {config.checkpoint_filename_prefix}")
+    if config.log_gradient_norm:
+        print(f"Gradient norm logging: Enabled")
     print("="*50 + "\n")
     
     # Start training
@@ -524,7 +385,8 @@ def main():
     )
     
     print("Training completed!")
-    print(f"Best checkpoint: {checkpoint_callback.best_model_path if config.enable_checkpointing else 'N/A'}")
+    if config.enable_checkpointing:
+        print(f"Best checkpoint: {checkpoint_callback.best_model_path}")
 
 
 if __name__ == '__main__':

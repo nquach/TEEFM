@@ -249,32 +249,62 @@ class VideoMAE(nn.Module):
         self.num_patches = self.encoder.num_patches
         self.num_patches_per_frame = self.encoder.num_patches_per_frame
     
-    @classmethod
-    def from_pretrained(
-        cls,
-        checkpoint_path: str,
-        strict: bool = True,
-        **kwargs
-    ) -> 'VideoMAE':
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Load VideoMAE model from pretrained checkpoint.
+        Forward pass through VideoMAE.
         
         Args:
-            checkpoint_path: Path to pretrained checkpoint file (.ckpt, .pth, or .pt)
-            strict: If True, requires all keys to match. If False, allows partial loading
-            **kwargs: Additional arguments to pass to VideoMAE constructor
-                     (backbone, img_size, patch_size, etc.)
-        
+            x: Input video tensor of shape (B, T, H, W, C)
+            mask: Binary mask of shape (B, num_patches) - 1 for visible, 0 for masked
+            
         Returns:
-            VideoMAE model with loaded weights
+            Tuple of (reconstructed_patches, target_patches)
+            - reconstructed_patches: (B, num_patches, patch_size^2 * 3)
+            - target_patches: (B, num_patches, patch_size^2 * 3)
         """
-        # Create model instance
-        model = cls(**kwargs)
+        # Encode visible patches
+        latent = self.encoder(x, mask=mask)  # (B, num_patches+1, embed_dim)
         
-        # Load pretrained weights
-        model.load_pretrained(checkpoint_path, strict=strict)
+        # Decode to reconstruct all patches
+        pred = self.decoder(latent, mask)  # (B, num_patches, patch_size^2 * 3)
         
-        return model
+        # Extract target patches (for loss computation)
+        target = self.patchify(x)  # (B, num_patches, patch_size^2 * 3)
+        
+        return pred, target
+    
+    def patchify(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Convert video frames into patches.
+        
+        Args:
+            x: Input video tensor of shape (B, T, H, W, C)
+            
+        Returns:
+            Patches of shape (B, num_patches, patch_size^2 * 3)
+        """
+        B, T, H, W, C = x.shape
+        p = self.patch_size
+        
+        # Reshape to process frames
+        x = x.reshape(B * T, H, W, C)
+        
+        # Convert to patches: (B*T, H, W, C) -> (B*T, H//p, W//p, p*p*C)
+        h = H // p
+        w = W // p
+        
+        x = x.reshape(B * T, h, p, w, p, C)
+        x = x.permute(0, 1, 3, 2, 4, 5)  # (B*T, h, w, p, p, C)
+        x = x.reshape(B * T, h * w, p * p * C)
+        
+        # Reshape back to separate batch and time
+        x = x.reshape(B, T * h * w, p * p * C)
+        
+        return x
     
     def load_pretrained(
         self,
@@ -337,7 +367,6 @@ class VideoMAE(nn.Module):
             result = self.load_state_dict(state_dict, strict=strict)
             
             # When strict=False, load_state_dict returns a NamedTuple with missing_keys and unexpected_keys
-            # When strict=True, it raises RuntimeError if there are missing/unexpected keys
             if not strict and result:
                 missing_keys = result.missing_keys
                 unexpected_keys = result.unexpected_keys
@@ -372,83 +401,4 @@ class VideoMAE(nn.Module):
             raise RuntimeError(
                 f"Error loading pretrained weights from {checkpoint_path}: {e}"
             ) from e
-    
-    def forward(
-        self,
-        x: torch.Tensor,
-        mask: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Forward pass through VideoMAE.
-        
-        Args:
-            x: Input video tensor of shape (B, T, H, W, C)
-            mask: Binary mask of shape (B, num_patches) - 1 for visible, 0 for masked
-            
-        Returns:
-            Tuple of (reconstructed_patches, target_patches)
-            - reconstructed_patches: (B, num_patches, patch_size^2 * 3)
-            - target_patches: (B, num_patches, patch_size^2 * 3)
-        """
-        # Encode visible patches
-        latent = self.encoder(x, mask=mask)  # (B, num_patches+1, embed_dim)
-        
-        # Decode to reconstruct all patches
-        pred = self.decoder(latent, mask)  # (B, num_patches, patch_size^2 * 3)
-        
-        # Extract target patches (for loss computation)
-        target = self.patchify(x)  # (B, num_patches, patch_size^2 * 3)
-        
-        return pred, target
-    
-    def patchify(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Convert video frames into patches.
-        
-        Args:
-            x: Input video tensor of shape (B, T, H, W, C)
-            
-        Returns:
-            Patches of shape (B, num_patches, patch_size^2 * 3)
-        """
-        B, T, H, W, C = x.shape
-        p = self.patch_size
-        
-        # Reshape to process frames
-        x = x.reshape(B * T, H, W, C)
-        
-        # Convert to patches: (B*T, H, W, C) -> (B*T, H//p, W//p, p*p*C)
-        h = H // p
-        w = W // p
-        
-        x = x.reshape(B * T, h, p, w, p, C)
-        x = x.permute(0, 1, 3, 2, 4, 5)  # (B*T, h, w, p, p, C)
-        x = x.reshape(B * T, h * w, p * p * C)
-        
-        # Reshape back to separate batch and time
-        x = x.reshape(B, T * h * w, p * p * C)
-        
-        return x
-    
-    def unpatchify(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Convert patches back to video frames.
-        
-        Args:
-            x: Patches of shape (B, num_patches, patch_size^2 * 3)
-            
-        Returns:
-            Video tensor of shape (B, T, H, W, C)
-        """
-        B = x.shape[0]
-        p = self.patch_size
-        h = w = self.img_size // p
-        T = self.num_frames
-        
-        # Reshape patches
-        x = x.reshape(B, T, h, w, p, p, 3)
-        x = x.permute(0, 1, 2, 4, 3, 5, 6)  # (B, T, h, p, w, p, 3)
-        x = x.reshape(B, T, h * p, w * p, 3)
-        
-        return x
 

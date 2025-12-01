@@ -39,7 +39,6 @@ class PatchEmbedding(nn.Module):
         self.num_patches = self.num_patches_per_frame * num_frames
         
         # Convolutional patch embedding
-        # Input: (B, T, C, H, W) -> Output: (B, T*H*W, D)
         self.proj = nn.Conv2d(
             in_channels,
             embed_dim,
@@ -75,7 +74,7 @@ class PatchEmbedding(nn.Module):
         # Apply patch embedding: (B*T, C, H, W) -> (B*T, D, H//patch_size, W//patch_size)
         x = self.proj(x)  # (B*T, D, H_p, W_p)
         
-        # Flatten spatial dimensions: (B*T, D, H_p, W_p) -> (B*T, D, H_p*W_p)
+        # Flatten spatial dimensions
         H_p, W_p = x.shape[2], x.shape[3]
         x = x.flatten(2)  # (B*T, D, num_patches_per_frame)
         

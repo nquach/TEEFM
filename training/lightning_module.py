@@ -7,11 +7,8 @@ into a PyTorch Lightning module for easy multi-GPU training.
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import pytorch_lightning as pl
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from typing import Optional, Dict, Any
-import numpy as np
+from typing import Optional, Dict
 
 import sys
 import os
@@ -33,6 +30,7 @@ class VideoMAELightningModule(pl.LightningModule):
     - Optimizer configuration (AdamWScheduleFree)
     - Learning rate scheduling
     - Logging and metrics
+    - Gradient norm tracking (optional)
     """
     
     def __init__(
@@ -59,12 +57,11 @@ class VideoMAELightningModule(pl.LightningModule):
         # Optimizer parameters (for AdamWScheduleFree)
         beta1: float = 0.9,
         beta2: float = 0.95,
-        warmup_steps: Optional[int] = None,
         # Pretrained weights
         pretrained_checkpoint: Optional[str] = None,  # Path to pretrained checkpoint
         load_pretrained_strict: bool = True,  # Strict loading mode
         # Logging
-        log_gradient_norm: bool = False  # Log L2 norm of full loss gradient
+        log_gradient_norm: bool = False  # Log L2 norm of full loss gradient (off by default)
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -106,7 +103,6 @@ class VideoMAELightningModule(pl.LightningModule):
         self.norm_pix_loss = norm_pix_loss
         self.beta1 = beta1
         self.beta2 = beta2
-        self.warmup_steps = warmup_steps
         self.log_gradient_norm = log_gradient_norm
         
         # Loss function (MSE)
@@ -229,26 +225,6 @@ class VideoMAELightningModule(pl.LightningModule):
         
         return loss
     
-    def on_after_backward(self):
-        """Called after backward pass. Log gradient norm if enabled."""
-        if self.log_gradient_norm:
-            # Compute L2 norm of all gradients
-            total_norm = 0.0
-            for p in self.parameters():
-                if p.grad is not None:
-                    param_norm = p.grad.data.norm(2)
-                    total_norm += param_norm.item() ** 2
-            total_norm = total_norm ** (1. / 2)
-            
-            self.log(
-                'train/gradient_norm',
-                total_norm,
-                on_step=True,
-                on_epoch=False,
-                prog_bar=False,
-                logger=True
-            )
-    
     def validation_step(
         self,
         batch: torch.Tensor,
@@ -285,6 +261,26 @@ class VideoMAELightningModule(pl.LightningModule):
         
         return {'val_loss': loss}
     
+    def on_after_backward(self):
+        """Called after backward pass. Log gradient norm if enabled."""
+        if self.log_gradient_norm:
+            # Compute L2 norm of all gradients
+            total_norm = 0.0
+            for p in self.parameters():
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2)
+                    total_norm += param_norm.item() ** 2
+            total_norm = total_norm ** (1. / 2)
+            
+            self.log(
+                'train/gradient_norm',
+                total_norm,
+                on_step=True,
+                on_epoch=False,
+                prog_bar=False,
+                logger=True
+            )
+    
     def configure_optimizers(self):
         """
         Configure optimizer and learning rate scheduler.
@@ -303,13 +299,14 @@ class VideoMAELightningModule(pl.LightningModule):
                 betas=(self.beta1, self.beta2)
             )
             
-            # AdamWScheduleFree doesn't need a scheduler, but we can add warmup
-            # For now, return optimizer directly
+            # AdamWScheduleFree doesn't need a scheduler
             return optimizer
             
         except ImportError:
             # Fallback to standard AdamW if schedulefree is not available
             print("Warning: schedulefree not available, using AdamW instead")
+            from torch.optim.lr_scheduler import CosineAnnealingLR
+            
             optimizer = torch.optim.AdamW(
                 self.parameters(),
                 lr=self.learning_rate,

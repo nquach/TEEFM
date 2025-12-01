@@ -7,7 +7,7 @@ as needed.
 """
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -23,19 +23,14 @@ class VideoMAEConfig:
     # Data parameters
     csv_file: str = 'mp4_paths.csv'
     val_csv_file: str = 'val500_2023-2024.csv'  # Validation set CSV file
-    dataset_subset_ratio: float = 1.0  # Ratio of dataset to use (1.0 = use all, 0.5 = use 50%, off by default)
-    # LitData optimization (for faster data loading)
-    use_litdata: bool = True  # Use litdata streaming (requires preprocessing with optimize_video_dataset)
-    litdata_output_dir: str = 'litdata_optimized'  # Directory for optimized data chunks
-    litdata_val_output_dir: str = 'litdata_optimized_val'  # Directory for optimized validation data
     num_frames: int = 32  # Frames to sample before downsampling
     temporal_stride: int = 2  # Stride for temporal downsampling
     final_num_frames: int = 16  # Final number of frames after downsampling
     img_size: int = 224
     batch_size: int = 8
-    num_workers: int = os.cpu_count() or 4  # Use all available CPUs, fallback to 4 if count unavailable
+    num_workers: int = os.cpu_count() or 4  # Use all available CPUs
     pin_memory: bool = True
-    persistent_workers: bool = True  # Keep workers alive between epochs (faster)
+    persistent_workers: bool = True  # Keep workers alive between epochs
     prefetch_factor: int = 2  # Number of batches to prefetch per worker
     
     # Model parameters
@@ -50,7 +45,6 @@ class VideoMAEConfig:
     # Masking parameters (EVEREST)
     mask_ratio: float = 0.9  # Ratio of patches to mask (high ratio as in VideoMAE)
     motion_weight: float = 0.7  # Weight for motion-based token selection
-    random_ratio: float = 0.1  # Small random component for diversity
     
     # Training parameters
     learning_rate: float = 1.5e-4  # Base learning rate
@@ -63,14 +57,13 @@ class VideoMAEConfig:
     
     # Training setup
     accelerator: str = 'gpu'  # 'gpu', 'cpu', or 'auto'
-    devices: Optional[int] = None  # None = use all available GPUs
+    devices: Optional[int] = None  # None = use all available GPUs (auto)
     precision: str = '16-mixed'  # Mixed precision training: '16-mixed', '32', 'bf16-mixed'
     gradient_clip_val: Optional[float] = None  # Gradient clipping value
     accumulate_grad_batches: int = 1  # Gradient accumulation
     
     # Logging and checkpointing
     log_every_n_steps: int = 50
-    log_gradient_norm: bool = False  # Log L2 norm of full loss gradient (off by default)
     # Validation frequency controls (work together):
     # - check_val_every_n_epoch: Controls which epochs to validate (epoch-level frequency)
     #   Example: 10 means validate at the end of every 10th epoch
@@ -96,6 +89,9 @@ class VideoMAEConfig:
     pretrained_checkpoint: Optional[str] = None  # Path to pretrained model weights (.ckpt, .pth, or .pt)
     load_pretrained_strict: bool = True  # If False, allows partial weight loading when architectures don't match exactly
     
+    # Logging options
+    log_gradient_norm: bool = False  # Log L2 norm of full loss gradient (off by default)
+    
     # Other
     seed: int = 42
     deterministic: bool = False  # Set to True for reproducibility (slower)
@@ -108,8 +104,6 @@ class VideoMAEConfig:
             f"mask_ratio must be between 0 and 1, got {self.mask_ratio}"
         assert 0 <= self.motion_weight <= 1, \
             f"motion_weight must be between 0 and 1, got {self.motion_weight}"
-        assert 0 < self.dataset_subset_ratio <= 1, \
-            f"dataset_subset_ratio must be between 0 and 1, got {self.dataset_subset_ratio}"
         assert self.final_num_frames == self.num_frames // self.temporal_stride, \
             f"final_num_frames ({self.final_num_frames}) should equal " \
             f"num_frames // temporal_stride ({self.num_frames // self.temporal_stride})"
@@ -141,17 +135,5 @@ def get_vit_l_config() -> VideoMAEConfig:
         batch_size=4,  # Smaller batch due to memory constraints
         learning_rate=1.0e-4,  # Slightly lower LR for larger model
         accumulate_grad_batches=2  # Compensate for smaller batch
-    )
-
-
-def get_debug_config() -> VideoMAEConfig:
-    """Get configuration for debugging (small model, fast training)."""
-    return VideoMAEConfig(
-        backbone='ViT-S',
-        batch_size=4,
-        max_epochs=5,
-        num_workers=2,
-        log_every_n_steps=10,
-        check_val_every_n_epoch=1
     )
 

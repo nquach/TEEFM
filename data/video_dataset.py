@@ -2,256 +2,27 @@
 Video Dataset Module for VideoMAE Training
 
 This module implements a PyTorch Dataset class for loading video data
-from MP4 files. It handles frame sampling, temporal downsampling, and
-data augmentation for self-supervised video representation learning.
+from MP4 files using torchcodec for efficient video decoding.
+It handles frame sampling, temporal downsampling, and data augmentation.
 """
 
 import os
 import pandas as pd
 import torch
-import torch.nn as nn
 from torch.utils.data import Dataset
-from typing import Optional, Tuple, List, Dict
+from typing import Optional, Tuple, Dict
 import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
 import numpy as np
 import random
-from functools import lru_cache
 
 try:
     from torchcodec import read_video
     TORCHCODEC_AVAILABLE = True
 except ImportError:
     TORCHCODEC_AVAILABLE = False
-    # Fallback to torchvision if torchcodec not available
-    from torchvision.io import read_video, VideoReader
+    from torchvision.io import read_video
     print("Warning: torchcodec not available. Install with: pip install torchcodec. Falling back to torchvision.")
-
-
-class VideoDataset(Dataset):
-    """
-    Dataset class for loading videos from MP4 files.
-    
-    This dataset:
-    - Loads video paths from a CSV file
-    - Randomly samples 32 consecutive frames from each video
-    - Temporally downsamples with stride 2 to get 16 frames
-    - Assumes videos are already 224x224x3 (no resizing needed)
-    - Returns normalized video tensors for training
-    
-    Args:
-        csv_file (str): Path to CSV file containing video file paths (one per line)
-        num_frames (int): Number of frames to sample (default: 32)
-        temporal_stride (int): Stride for temporal downsampling (default: 2)
-        transform (Optional[transforms.Compose]): Optional transforms to apply
-    """
-    
-    def __init__(
-        self,
-        csv_file: str,
-        num_frames: int = 32,
-        temporal_stride: int = 2,
-        transform: Optional[transforms.Compose] = None,
-        cache_video_metadata: bool = True,
-        subset_ratio: float = 1.0,
-        subset_seed: Optional[int] = None
-    ):
-        self.csv_file = csv_file
-        self.num_frames = num_frames
-        self.temporal_stride = temporal_stride
-        self.transform = transform
-        self.cache_video_metadata = cache_video_metadata
-        self.subset_ratio = subset_ratio
-        
-        # Read video paths from CSV file
-        # CSV format: one path per line (no header)
-        try:
-            df = pd.read_csv(csv_file, header=None, names=['path'])
-            self.video_paths = df['path'].tolist()
-        except Exception as e:
-            raise ValueError(f"Error reading CSV file {csv_file}: {e}")
-        
-        if len(self.video_paths) == 0:
-            raise ValueError(f"No valid video files found in {csv_file}")
-        
-        # Randomly sample a subset if ratio < 1.0
-        if self.subset_ratio < 1.0:
-            if subset_seed is not None:
-                random.seed(subset_seed)
-                np.random.seed(subset_seed)
-            
-            num_samples = max(1, int(len(self.video_paths) * self.subset_ratio))
-            self.video_paths = random.sample(self.video_paths, num_samples)
-            print(f"Randomly sampled {num_samples} videos ({self.subset_ratio*100:.1f}%) from {len(df)} total paths")
-        
-        # Cache for video metadata (number of frames)
-        self._video_metadata_cache: Dict[str, int] = {}
-        
-        print(f"Loaded {len(self.video_paths)} video paths from {csv_file}")
-    
-    def _get_video_frame_count(self, video_path: str) -> int:
-        """
-        Get the number of frames in a video file.
-        Uses caching to avoid repeated reads.
-        """
-        if video_path in self._video_metadata_cache:
-            return self._video_metadata_cache[video_path]
-        
-        try:
-            if TORCHCODEC_AVAILABLE:
-                # Use torchcodec to get frame count
-                # torchcodec read_video can read metadata without loading all frames
-                video, _, info = read_video(video_path)
-                frame_count = video.shape[0] if video is not None else 0
-                if frame_count == 0 and info is not None:
-                    # Try to get frame count from info if available
-                    frame_count = info.get('num_frames', self.num_frames)
-            else:
-                # Fallback to torchvision VideoReader
-                from torchvision.io import VideoReader
-                vr = VideoReader(video_path, "video")
-                frame_count = len(vr)
-            
-            self._video_metadata_cache[video_path] = frame_count
-            return frame_count
-        except Exception as e:
-            # Fallback: try to load video to get frame count
-            try:
-                video, _, _ = read_video(video_path)
-                frame_count = video.shape[0] if video is not None else self.num_frames
-                self._video_metadata_cache[video_path] = frame_count
-                return frame_count
-            except Exception:
-                # If we can't read the video, return a default
-                print(f"Warning: Could not read video {video_path}, using default frame count")
-                return self.num_frames
-    
-    def __len__(self) -> int:
-        """Return the number of videos in the dataset."""
-        return len(self.video_paths)
-    
-    def __getitem__(self, idx: int) -> torch.Tensor:
-        """
-        Load and process a video sample.
-        
-        Args:
-            idx (int): Index of the video to load
-            
-        Returns:
-            torch.Tensor: Video tensor of shape (T, H, W, C) where:
-                - T: number of frames after downsampling (16 by default)
-                - H, W: height and width (224x224)
-                - C: channels (3 for RGB)
-        """
-        video_path = self.video_paths[idx]
-        
-        try:
-            # Get video frame count (cached)
-            num_frames_total = self._get_video_frame_count(video_path)
-            
-            # Randomly sample starting frame for 32 consecutive frames
-            max_start = max(0, num_frames_total - self.num_frames)
-            if max_start <= 0:
-                start_frame = 0
-                # Need to load all frames if video is short
-                end_frame = min(num_frames_total, self.num_frames)
-            else:
-                start_frame = torch.randint(0, max_start + 1, (1,)).item()
-                end_frame = start_frame + self.num_frames
-            
-            # Load video frames using torchcodec (faster than torchvision)
-            if TORCHCODEC_AVAILABLE:
-                # Use torchcodec read_video
-                # torchcodec read_video returns (T, H, W, C) format by default
-                video, _, _ = read_video(video_path)
-                
-                if video is None or video.shape[0] == 0:
-                    raise ValueError(f"Failed to load video: {video_path}")
-                
-                # Extract the frame range we need
-                if num_frames_total < self.num_frames:
-                    # If video is shorter, pad by repeating last frame
-                    padding = self.num_frames - num_frames_total
-                    last_frame = video[-1:].repeat(padding, 1, 1, 1)
-                    video = torch.cat([video, last_frame], dim=0)
-                    start_frame = 0
-                    end_frame = self.num_frames
-                else:
-                    video = video[start_frame:end_frame]
-                
-                # Ensure format is (T, H, W, C)
-                if video.dim() == 4 and video.shape[1] == 3:
-                    # Convert from (T, C, H, W) to (T, H, W, C)
-                    video = video.permute(0, 2, 3, 1)
-            else:
-                # Fallback to torchvision
-                try:
-                    from torchvision.io import VideoReader
-                    vr = VideoReader(video_path, "video")
-                    vr.seek(start_frame)
-                    
-                    frames = []
-                    for _ in range(min(end_frame - start_frame, self.num_frames)):
-                        frame_data = vr.next()
-                        if frame_data is None:
-                            break
-                        frame_tensor = frame_data['data'].permute(2, 0, 1)  # (C, H, W)
-                        frames.append(frame_tensor)
-                    
-                    if len(frames) < self.num_frames:
-                        last_frame = frames[-1] if frames else torch.zeros(3, 224, 224)
-                        while len(frames) < self.num_frames:
-                            frames.append(last_frame)
-                    
-                    video = torch.stack(frames[:self.num_frames], dim=0)  # (num_frames, C, H, W)
-                    video = video.permute(0, 2, 3, 1)  # (num_frames, H, W, C)
-                except Exception:
-                    # Final fallback: use read_video
-                    video, _, _ = read_video(
-                        video_path,
-                        pts_unit='sec',
-                        output_format='TCHW'
-                    )
-                    
-                    if num_frames_total < self.num_frames:
-                        padding = self.num_frames - num_frames_total
-                        last_frame = video[-1:].repeat(padding, 1, 1, 1)
-                        video = torch.cat([video, last_frame], dim=0)
-                        start_frame = 0
-                        end_frame = self.num_frames
-                    else:
-                        video = video[start_frame:end_frame]
-                    
-                    video = video.permute(0, 2, 3, 1)  # (T, H, W, C)
-            
-            # Ensure video is in (T, H, W, C) format
-            if video.dim() == 4 and video.shape[1] == 3:
-                # Convert from (T, C, H, W) to (T, H, W, C) if needed
-                video = video.permute(0, 2, 3, 1)
-            
-            # Temporally downsample with stride 2 to get 16 frames
-            video = video[::self.temporal_stride]  # Shape: (16, 224, 224, 3)
-            
-            # Normalize to [0, 1] range
-            video = video.float() / 255.0
-            
-            # Apply transforms if provided (e.g., data augmentation)
-            if self.transform is not None:
-                # Transforms expect (T, H, W, C) or (H, W, C) format
-                video = self.transform(video)
-            
-            # Ensure output is in (T, H, W, C) format
-            # T=16, H=224, W=224, C=3
-            return video
-            
-        except Exception as e:
-            # If video loading fails, return a zero tensor
-            print(f"Warning: Failed to load video {video_path}: {e}")
-            # Return a dummy video with correct shape
-            return torch.zeros(
-                (self.num_frames // self.temporal_stride, 224, 224, 3),
-                dtype=torch.float32
-            )
 
 
 class MultiscaleCrop:
@@ -280,9 +51,6 @@ class MultiscaleCrop:
         """
         Apply multiscale crop to video.
         
-        Applies the same random crop (location and scale) to all frames,
-        preserving temporal coherence.
-        
         Args:
             video: Video tensor of shape (T, H, W, C) with values in [0, 1]
             
@@ -306,7 +74,6 @@ class MultiscaleCrop:
         left = random.randint(0, max_left) if max_left > 0 else 0
         
         # Crop all frames with the same parameters
-        # video: (T, H, W, C)
         cropped_video = video[:, top:top+crop_size, left:left+crop_size, :]
         
         # Resize all frames to target size
@@ -314,7 +81,6 @@ class MultiscaleCrop:
         cropped_video = cropped_video.permute(0, 3, 1, 2)  # (T, C, H, W)
         
         # Resize all frames at once for efficiency
-        # Reshape to (T*C, 1, H, W) for batch resize
         T_orig, C_orig, H_orig, W_orig = cropped_video.shape
         cropped_flat = cropped_video.reshape(T_orig * C_orig, 1, H_orig, W_orig)
         
@@ -332,6 +98,185 @@ class MultiscaleCrop:
         resized = resized.permute(0, 2, 3, 1)
         
         return resized
+
+
+class VideoDataset(Dataset):
+    """
+    Dataset class for loading videos from MP4 files using torchcodec.
+    
+    This dataset:
+    - Loads video paths from a CSV file
+    - Randomly samples 32 consecutive frames from each video
+    - Temporally downsamples with stride 2 to get 16 frames
+    - Assumes videos are already 224x224x3 (no resizing needed)
+    - Returns normalized video tensors for training
+    
+    Args:
+        csv_file (str): Path to CSV file containing video file paths (one per line)
+        num_frames (int): Number of frames to sample (default: 32)
+        temporal_stride (int): Stride for temporal downsampling (default: 2)
+        transform (Optional[transforms.Compose]): Optional transforms to apply
+        cache_video_metadata (bool): Whether to cache video metadata
+    """
+    
+    def __init__(
+        self,
+        csv_file: str,
+        num_frames: int = 32,
+        temporal_stride: int = 2,
+        transform: Optional[transforms.Compose] = None,
+        cache_video_metadata: bool = True
+    ):
+        self.csv_file = csv_file
+        self.num_frames = num_frames
+        self.temporal_stride = temporal_stride
+        self.transform = transform
+        self.cache_video_metadata = cache_video_metadata
+        
+        # Read video paths from CSV file
+        # CSV format: one path per line (no header)
+        try:
+            df = pd.read_csv(csv_file, header=None, names=['path'])
+            self.video_paths = df['path'].tolist()
+        except Exception as e:
+            raise ValueError(f"Error reading CSV file {csv_file}: {e}")
+        
+        # Filter out non-existent files
+        self.video_paths = [p for p in self.video_paths if os.path.exists(p)]
+        
+        if len(self.video_paths) == 0:
+            raise ValueError(f"No valid video files found in {csv_file}")
+        
+        # Cache for video metadata (number of frames)
+        self._video_metadata_cache: Dict[str, int] = {}
+        
+        print(f"Loaded {len(self.video_paths)} video paths from {csv_file}")
+    
+    def _get_video_frame_count(self, video_path: str) -> int:
+        """
+        Get the number of frames in a video file.
+        Uses caching to avoid repeated reads.
+        
+        Args:
+            video_path: Path to video file
+            
+        Returns:
+            Number of frames in the video
+        """
+        if video_path in self._video_metadata_cache:
+            return self._video_metadata_cache[video_path]
+        
+        try:
+            if TORCHCODEC_AVAILABLE:
+                # Use torchcodec to get frame count
+                video, _, _ = read_video(video_path)
+                frame_count = video.shape[0] if video is not None else 0
+            else:
+                # Fallback to torchvision
+                video, _, _ = read_video(video_path, pts_unit='sec', output_format='TCHW')
+                frame_count = video.shape[0]
+            
+            self._video_metadata_cache[video_path] = frame_count
+            return frame_count
+        except Exception:
+            # If we can't read the video, return a default
+            print(f"Warning: Could not read video {video_path}, using default frame count")
+            return self.num_frames
+    
+    def __len__(self) -> int:
+        """Return the number of videos in the dataset."""
+        return len(self.video_paths)
+    
+    def __getitem__(self, idx: int) -> torch.Tensor:
+        """
+        Load and process a video sample.
+        
+        Args:
+            idx (int): Index of the video to load
+            
+        Returns:
+            torch.Tensor: Video tensor of shape (T, H, W, C) where:
+                - T: number of frames after downsampling (16 by default)
+                - H, W: height and width (224x224)
+                - C: channels (3 for RGB)
+        """
+        video_path = self.video_paths[idx]
+        
+        try:
+            # Get video frame count (cached)
+            num_frames_total = self._get_video_frame_count(video_path)
+            
+            # Randomly sample starting frame for 32 consecutive frames
+            max_start = max(0, num_frames_total - self.num_frames)
+            if max_start <= 0:
+                start_frame = 0
+                end_frame = min(num_frames_total, self.num_frames)
+            else:
+                start_frame = torch.randint(0, max_start + 1, (1,)).item()
+                end_frame = start_frame + self.num_frames
+            
+            # Load video frames using torchcodec
+            if TORCHCODEC_AVAILABLE:
+                # Use torchcodec read_video
+                video, _, _ = read_video(video_path)
+                
+                if video is None or video.shape[0] == 0:
+                    raise ValueError(f"Failed to load video: {video_path}")
+                
+                # Extract the frame range we need
+                if num_frames_total < self.num_frames:
+                    # If video is shorter, pad by repeating last frame
+                    padding = self.num_frames - num_frames_total
+                    last_frame = video[-1:].repeat(padding, 1, 1, 1)
+                    video = torch.cat([video, last_frame], dim=0)
+                    start_frame = 0
+                    end_frame = self.num_frames
+                else:
+                    video = video[start_frame:end_frame]
+                
+                # Ensure format is (T, H, W, C)
+                if video.dim() == 4 and video.shape[1] == 3:
+                    # Convert from (T, C, H, W) to (T, H, W, C)
+                    video = video.permute(0, 2, 3, 1)
+            else:
+                # Fallback to torchvision
+                video, _, _ = read_video(
+                    video_path,
+                    pts_unit='sec',
+                    output_format='TCHW'
+                )
+                
+                if num_frames_total < self.num_frames:
+                    padding = self.num_frames - num_frames_total
+                    last_frame = video[-1:].repeat(padding, 1, 1, 1)
+                    video = torch.cat([video, last_frame], dim=0)
+                    start_frame = 0
+                    end_frame = self.num_frames
+                else:
+                    video = video[start_frame:end_frame]
+                
+                video = video.permute(0, 2, 3, 1)  # (T, H, W, C)
+            
+            # Temporally downsample with stride 2 to get 16 frames
+            video = video[::self.temporal_stride]  # Shape: (16, 224, 224, 3)
+            
+            # Normalize to [0, 1] range
+            video = video.float() / 255.0
+            
+            # Apply transforms if provided (e.g., data augmentation)
+            if self.transform is not None:
+                video = self.transform(video)
+            
+            # Ensure output is in (T, H, W, C) format
+            return video
+            
+        except Exception as e:
+            # If video loading fails, return a zero tensor
+            print(f"Warning: Failed to load video {video_path}: {e}")
+            return torch.zeros(
+                (self.num_frames // self.temporal_stride, 224, 224, 3),
+                dtype=torch.float32
+            )
 
 
 def get_video_transforms(
@@ -354,20 +299,14 @@ def get_video_transforms(
     """
     transform_list = []
     
-    if mode == 'train':
-        # Training augmentations
-        if use_multiscale_crop:
-            # Multiscale cropping with temporal coherence
-            # Same crop location and scale applied to all frames
-            transform_list.append(
-                MultiscaleCrop(
-                    target_size=224,
-                    scale_range=crop_scale_range
-                )
+    if mode == 'train' and use_multiscale_crop:
+        # Multiscale cropping with temporal coherence
+        transform_list.append(
+            MultiscaleCrop(
+                target_size=224,
+                scale_range=crop_scale_range
             )
-    else:
-        # Validation: no augmentation
-        pass
+        )
     
     if normalize:
         # ImageNet normalization statistics

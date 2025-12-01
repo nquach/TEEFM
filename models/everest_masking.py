@@ -12,9 +12,7 @@ maintaining or improving performance.
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from typing import Tuple, Optional
-import numpy as np
+from typing import Tuple
 
 
 class MotionEstimator(nn.Module):
@@ -75,57 +73,6 @@ class MotionEstimator(nn.Module):
         return motion_scores
 
 
-class InformationIntensiveFrameSelector:
-    """
-    Information-intensive frame selection strategy.
-    
-    Selects frames that contain the most information with minimal redundancy.
-    This is used to focus on informative and causal frames.
-    """
-    
-    def __init__(self, num_frames: int = 16):
-        self.num_frames = num_frames
-    
-    def select_frames(
-        self,
-        video: torch.Tensor,
-        num_selected: Optional[int] = None
-    ) -> torch.Tensor:
-        """
-        Select information-intensive frames from video.
-        
-        Args:
-            video: Video tensor of shape (B, T, H, W, C)
-            num_selected: Number of frames to select (default: all frames)
-            
-        Returns:
-            Selected video tensor
-        """
-        if num_selected is None or num_selected >= video.shape[1]:
-            return video
-        
-        # Simple strategy: select frames with highest variance (more information)
-        B, T, H, W, C = video.shape
-        
-        # Compute variance per frame
-        frame_vars = video.var(dim=(2, 3, 4))  # (B, T)
-        
-        # Select top-k frames with highest variance
-        _, top_indices = torch.topk(frame_vars, num_selected, dim=1)  # (B, num_selected)
-        
-        # Sort indices to maintain temporal order
-        top_indices, _ = torch.sort(top_indices, dim=1)
-        
-        # Select frames
-        selected_frames = torch.gather(
-            video,
-            dim=1,
-            index=top_indices.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, H, W, C)
-        )
-        
-        return selected_frames
-
-
 class EVERESTMaskingGenerator:
     """
     EVEREST masking generator that creates intelligent masks based on
@@ -138,37 +85,28 @@ class EVERESTMaskingGenerator:
         patch_size: int = 16,
         num_frames: int = 16,
         mask_ratio: float = 0.9,  # High masking ratio as in VideoMAE
-        motion_weight: float = 0.7,  # Weight for motion-based selection
-        random_ratio: float = 0.1  # Small random component for diversity
+        motion_weight: float = 0.7  # Weight for motion-based selection
     ):
         self.img_size = img_size
         self.patch_size = patch_size
         self.num_frames = num_frames
         self.mask_ratio = mask_ratio
         self.motion_weight = motion_weight
-        self.random_ratio = random_ratio
         
         self.num_patches_per_frame = (img_size // patch_size) ** 2
         self.num_patches = self.num_patches_per_frame * num_frames
         
         self.motion_estimator = MotionEstimator()
-        self.frame_selector = InformationIntensiveFrameSelector(num_frames)
     
-    def __call__(
-        self,
-        x: torch.Tensor,
-        return_indices: bool = False
-    ) -> torch.Tensor:
+    def __call__(self, x: torch.Tensor) -> torch.Tensor:
         """
         Generate EVEREST mask for input video.
         
         Args:
             x: Input video tensor of shape (B, T, H, W, C)
-            return_indices: Whether to return mask indices
             
         Returns:
             Binary mask of shape (B, num_patches) - 1 for visible, 0 for masked
-            If return_indices=True, also returns indices of visible tokens
         """
         B = x.shape[0]
         device = x.device
@@ -200,73 +138,5 @@ class EVERESTMaskingGenerator:
         mask = torch.zeros(B, self.num_patches, device=device, dtype=torch.float32)
         mask.scatter_(1, visible_indices, 1.0)
         
-        if return_indices:
-            return mask, visible_indices
         return mask
-    
-    def get_motion_based_mask(
-        self,
-        x: torch.Tensor,
-        top_k_ratio: float = 0.1
-    ) -> torch.Tensor:
-        """
-        Generate mask based purely on motion (for analysis).
-        
-        Args:
-            x: Input video tensor
-            top_k_ratio: Ratio of top motion patches to keep visible
-            
-        Returns:
-            Binary mask
-        """
-        motion_scores = self.motion_estimator(x)
-        num_visible = int(self.num_patches * top_k_ratio)
-        
-        _, visible_indices = torch.topk(
-            motion_scores,
-            num_visible,
-            dim=1,
-            largest=True
-        )
-        
-        mask = torch.zeros(
-            x.shape[0],
-            self.num_patches,
-            device=x.device,
-            dtype=torch.float32
-        )
-        mask.scatter_(1, visible_indices, 1.0)
-        
-        return mask
-
-
-def random_masking(
-    x: torch.Tensor,
-    mask_ratio: float = 0.9,
-    num_patches: int = 196 * 16
-) -> torch.Tensor:
-    """
-    Random masking strategy (baseline for comparison).
-    
-    Args:
-        x: Input tensor (shape not used, just for batch size)
-        mask_ratio: Ratio of patches to mask
-        num_patches: Total number of patches
-        
-    Returns:
-        Binary mask of shape (B, num_patches)
-    """
-    B = x.shape[0]
-    device = x.device
-    
-    num_visible = int(num_patches * (1 - mask_ratio))
-    
-    # Randomly select visible patches
-    mask = torch.zeros(B, num_patches, device=device, dtype=torch.float32)
-    
-    for i in range(B):
-        visible_indices = torch.randperm(num_patches, device=device)[:num_visible]
-        mask[i, visible_indices] = 1.0
-    
-    return mask
 

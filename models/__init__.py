@@ -6,9 +6,7 @@ from .vit_backbone import VisionTransformer, get_vit_config
 from .videomae import VideoMAE, VideoMAEEncoder, VideoMAEDecoder
 from .everest_masking import (
     EVERESTMaskingGenerator,
-    MotionEstimator,
-    InformationIntensiveFrameSelector,
-    random_masking
+    MotionEstimator
 )
 
 __all__ = [
@@ -18,8 +16,6 @@ __all__ = [
     'VideoMAEEncoder',
     'VideoMAEDecoder',
     'EVERESTMaskingGenerator',
-    'MotionEstimator',
-    'InformationIntensiveFrameSelector',
-    'random_masking'
+    'MotionEstimator'
 ]
 
