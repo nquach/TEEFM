@@ -18,6 +18,18 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 
 from data import VideoDataset, get_video_transforms
+try:
+    from data.litdata_video_dataset import (
+        LitDataVideoDataset,
+        optimize_video_dataset,
+        StreamingDataLoader,
+        LITDATA_AVAILABLE
+    )
+except ImportError:
+    LITDATA_AVAILABLE = False
+    LitDataVideoDataset = None
+    optimize_video_dataset = None
+    StreamingDataLoader = None
 from training import VideoMAELightningModule
 from config import VideoMAEConfig, get_vit_s_config, get_vit_b_config, get_vit_l_config
 
@@ -37,59 +49,114 @@ def create_data_loaders(config: VideoMAEConfig):
     """
     Create training and validation data loaders.
     
+    Supports both regular PyTorch DataLoader and litdata StreamingDataLoader.
+    
     Args:
         config: Configuration object
         
     Returns:
         Tuple of (train_loader, val_loader)
     """
-    # Get transforms
-    train_transform = get_video_transforms(mode='train', normalize=False)
+    # Get transforms (only normalization for litdata, augmentations done during optimization)
+    train_transform = get_video_transforms(mode='train', normalize=False, use_multiscale_crop=False)
     val_transform = get_video_transforms(mode='val', normalize=False)
     
-    # Create datasets
-    # For unlabeled data, we can split into train/val or use all for training
-    # Here we use all data for training (self-supervised learning)
-    train_dataset = VideoDataset(
-        csv_file=config.csv_file,
-        num_frames=config.num_frames,
-        temporal_stride=config.temporal_stride,
-        transform=train_transform,
-        subset_ratio=config.dataset_subset_ratio,
-        subset_seed=config.seed  # Use same seed for reproducibility
-    )
-    
-    # Validation dataset from separate CSV file (no subset sampling for validation)
-    val_dataset = VideoDataset(
-        csv_file=config.val_csv_file,
-        num_frames=config.num_frames,
-        temporal_stride=config.temporal_stride,
-        transform=val_transform,
-        subset_ratio=1.0  # Always use full validation set
-    )
-    
-    # Create data loaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=config.batch_size,
-        shuffle=True,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_memory,
-        persistent_workers=config.persistent_workers if config.num_workers > 0 else False,
-        prefetch_factor=config.prefetch_factor if config.num_workers > 0 else 2,
-        drop_last=True  # Drop last incomplete batch
-    )
-    
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=config.batch_size,
-        shuffle=False,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_memory,
-        persistent_workers=config.persistent_workers if config.num_workers > 0 else False,
-        prefetch_factor=config.prefetch_factor if config.num_workers > 0 else 2,
-        drop_last=False
-    )
+    if config.use_litdata:
+        if not LITDATA_AVAILABLE:
+            raise ImportError(
+                "litdata is required but not installed. "
+                "Install with: pip install litdata\n"
+                "Or set use_litdata=False in config."
+            )
+        
+        # Check if optimized data exists
+        if not os.path.exists(config.litdata_output_dir):
+            raise ValueError(
+                f"Optimized data not found at {config.litdata_output_dir}. "
+                f"Please run optimize_video_dataset() first or set use_litdata=False."
+            )
+        
+        if not os.path.exists(config.litdata_val_output_dir):
+            raise ValueError(
+                f"Optimized validation data not found at {config.litdata_val_output_dir}. "
+                f"Please run optimize_video_dataset() for validation set first."
+            )
+        
+        # Use litdata streaming datasets
+        print(f"Using litdata streaming from {config.litdata_output_dir}")
+        train_dataset = LitDataVideoDataset(
+            input_dir=config.litdata_output_dir,
+            num_frames=config.num_frames,
+            temporal_stride=config.temporal_stride,
+            transform=train_transform
+        )
+        
+        val_dataset = LitDataVideoDataset(
+            input_dir=config.litdata_val_output_dir,
+            num_frames=config.num_frames,
+            temporal_stride=config.temporal_stride,
+            transform=val_transform
+        )
+        
+        # Use StreamingDataLoader
+        train_loader = StreamingDataLoader(
+            train_dataset,
+            batch_size=config.batch_size,
+            shuffle=True,
+            num_workers=config.num_workers,
+            pin_memory=config.pin_memory,
+            drop_last=True
+        )
+        
+        val_loader = StreamingDataLoader(
+            val_dataset,
+            batch_size=config.batch_size,
+            shuffle=False,
+            num_workers=config.num_workers,
+            pin_memory=config.pin_memory,
+            drop_last=False
+        )
+        
+    else:
+        # Use regular PyTorch datasets and loaders
+        train_dataset = VideoDataset(
+            csv_file=config.csv_file,
+            num_frames=config.num_frames,
+            temporal_stride=config.temporal_stride,
+            transform=train_transform,
+            subset_ratio=config.dataset_subset_ratio,
+            subset_seed=config.seed
+        )
+        
+        val_dataset = VideoDataset(
+            csv_file=config.val_csv_file,
+            num_frames=config.num_frames,
+            temporal_stride=config.temporal_stride,
+            transform=val_transform,
+            subset_ratio=1.0
+        )
+        
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=config.batch_size,
+            shuffle=True,
+            num_workers=config.num_workers,
+            pin_memory=config.pin_memory,
+            persistent_workers=config.persistent_workers if config.num_workers > 0 else False,
+            prefetch_factor=config.prefetch_factor if config.num_workers > 0 else 2,
+            drop_last=True
+        )
+        
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=config.batch_size,
+            shuffle=False,
+            num_workers=config.num_workers,
+            pin_memory=config.pin_memory,
+            persistent_workers=config.persistent_workers if config.num_workers > 0 else False,
+            prefetch_factor=config.prefetch_factor if config.num_workers > 0 else 2,
+            drop_last=False
+        )
     
     return train_loader, val_loader
 
@@ -281,6 +348,46 @@ def main():
         config.checkpoint_dir = args.checkpoint_dir
     if args.checkpoint_prefix:
         config.checkpoint_filename_prefix = args.checkpoint_prefix
+    if args.use_litdata is not None:
+        config.use_litdata = args.use_litdata
+    
+    # Handle data optimization (preprocessing step)
+    if args.optimize_data:
+        print("Optimizing dataset with litdata...")
+        if not LITDATA_AVAILABLE:
+            raise ImportError("litdata is required. Install with: pip install litdata")
+        
+        # Optimize training dataset
+        optimize_video_dataset(
+            csv_file=config.csv_file,
+            output_dir=config.litdata_output_dir,
+            num_frames=config.num_frames,
+            temporal_stride=config.temporal_stride,
+            img_size=config.img_size,
+            use_multiscale_crop=True,  # Apply augmentation during optimization
+            crop_scale_range=(0.8, 1.0),
+            subset_ratio=config.dataset_subset_ratio,
+            subset_seed=config.seed,
+            num_workers=config.num_workers
+        )
+        
+        # Optimize validation dataset
+        optimize_video_dataset(
+            csv_file=config.val_csv_file,
+            output_dir=config.litdata_val_output_dir,
+            num_frames=config.num_frames,
+            temporal_stride=config.temporal_stride,
+            img_size=config.img_size,
+            use_multiscale_crop=False,  # No augmentation for validation
+            crop_scale_range=(0.8, 1.0),
+            subset_ratio=1.0,
+            subset_seed=None,
+            num_workers=config.num_workers
+        )
+        
+        print("Data optimization complete!")
+        print("You can now run training with --use_litdata flag")
+        return
     
     # Set experiment name
     experiment_name = args.name or f'videomae_{config.backbone}_{config.mask_ratio}mask'
