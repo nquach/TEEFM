@@ -63,9 +63,6 @@ class VideoDataset(Dataset):
         except Exception as e:
             raise ValueError(f"Error reading CSV file {csv_file}: {e}")
         
-        # Filter out non-existent files
-        self.video_paths = [p for p in self.video_paths if os.path.exists(p)]
-        
         if len(self.video_paths) == 0:
             raise ValueError(f"No valid video files found in {csv_file}")
         

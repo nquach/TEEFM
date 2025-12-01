@@ -229,7 +229,6 @@ def optimize_video_dataset(
     # Read video paths
     df = pd.read_csv(csv_file, header=None, names=['path'])
     video_paths = df['path'].tolist()
-    video_paths = [p for p in video_paths if os.path.exists(p)]
     
     if len(video_paths) == 0:
         raise ValueError(f"No valid video files found in {csv_file}")
