@@ -300,7 +300,8 @@ def main():
         max_epochs=config.max_epochs,
         norm_pix_loss=config.norm_pix_loss,
         pretrained_checkpoint=config.pretrained_checkpoint,
-        load_pretrained_strict=config.load_pretrained_strict
+        load_pretrained_strict=config.load_pretrained_strict,
+        log_gradient_norm=config.log_gradient_norm
     )
     
     # Create callbacks

@@ -62,7 +62,9 @@ class VideoMAELightningModule(pl.LightningModule):
         warmup_steps: Optional[int] = None,
         # Pretrained weights
         pretrained_checkpoint: Optional[str] = None,  # Path to pretrained checkpoint
-        load_pretrained_strict: bool = True  # Strict loading mode
+        load_pretrained_strict: bool = True,  # Strict loading mode
+        # Logging
+        log_gradient_norm: bool = False  # Log L2 norm of full loss gradient
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -105,6 +107,7 @@ class VideoMAELightningModule(pl.LightningModule):
         self.beta1 = beta1
         self.beta2 = beta2
         self.warmup_steps = warmup_steps
+        self.log_gradient_norm = log_gradient_norm
         
         # Loss function (MSE)
         self.criterion = nn.MSELoss(reduction='none')
@@ -225,6 +228,26 @@ class VideoMAELightningModule(pl.LightningModule):
         )
         
         return loss
+    
+    def on_after_backward(self):
+        """Called after backward pass. Log gradient norm if enabled."""
+        if self.log_gradient_norm:
+            # Compute L2 norm of all gradients
+            total_norm = 0.0
+            for p in self.parameters():
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2)
+                    total_norm += param_norm.item() ** 2
+            total_norm = total_norm ** (1. / 2)
+            
+            self.log(
+                'train/gradient_norm',
+                total_norm,
+                on_step=True,
+                on_epoch=False,
+                prog_bar=False,
+                logger=True
+            )
     
     def validation_step(
         self,

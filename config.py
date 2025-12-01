@@ -62,6 +62,7 @@ class VideoMAEConfig:
     
     # Logging and checkpointing
     log_every_n_steps: int = 50
+    log_gradient_norm: bool = False  # Log L2 norm of full loss gradient (off by default)
     # Validation frequency controls (work together):
     # - check_val_every_n_epoch: Controls which epochs to validate (epoch-level frequency)
     #   Example: 10 means validate at the end of every 10th epoch
