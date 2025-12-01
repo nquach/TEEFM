@@ -25,7 +25,7 @@ class VideoMAEConfig:
     val_csv_file: str = 'val500_2023-2024.csv'  # Validation set CSV file
     dataset_subset_ratio: float = 1.0  # Ratio of dataset to use (1.0 = use all, 0.5 = use 50%, off by default)
     # LitData optimization (for faster data loading)
-    use_litdata: bool = False  # Use litdata streaming (requires preprocessing with optimize_video_dataset)
+    use_litdata: bool = True  # Use litdata streaming (requires preprocessing with optimize_video_dataset)
     litdata_output_dir: str = 'litdata_optimized'  # Directory for optimized data chunks
     litdata_val_output_dir: str = 'litdata_optimized_val'  # Directory for optimized validation data
     num_frames: int = 32  # Frames to sample before downsampling
