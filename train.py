@@ -480,7 +480,7 @@ def main():
     # Create trainer
     trainer = pl.Trainer(
         accelerator=config.accelerator,
-        devices=config.devices,
+        devices=config.devices if config.devices is not None else "auto",
         max_epochs=config.max_epochs,
         precision=config.precision,
         gradient_clip_val=config.gradient_clip_val,
