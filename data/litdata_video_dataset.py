@@ -9,6 +9,7 @@ import os
 import pandas as pd
 import torch
 from typing import Optional, Tuple, Dict, Any
+from functools import partial
 import torchvision.transforms as transforms
 from torchvision.io import read_video, VideoReader
 import numpy as np
@@ -249,19 +250,22 @@ def optimize_video_dataset(
     print(f"Optimizing {len(items)} videos to {output_dir}...")
     print("This may take a while. Videos are being preprocessed into optimized chunks.")
     
+    # Create a partial function with the kwargs
+    optimize_fn = partial(
+        optimize_video_item,
+        num_frames=num_frames,
+        temporal_stride=temporal_stride,
+        img_size=img_size,
+        use_multiscale_crop=use_multiscale_crop,
+        crop_scale_range=crop_scale_range
+    )
+    
     # Optimize dataset
     ld.optimize(
-        fn=optimize_video_item,
+        fn=optimize_fn,
         inputs=items,
         output_dir=output_dir,
-        num_workers=num_workers or os.cpu_count() or 4,
-        fn_kwargs={
-            'num_frames': num_frames,
-            'temporal_stride': temporal_stride,
-            'img_size': img_size,
-            'use_multiscale_crop': use_multiscale_crop,
-            'crop_scale_range': crop_scale_range
-        }
+        num_workers=num_workers or os.cpu_count() or 4
     )
     
     print(f"Optimization complete! Optimized data saved to {output_dir}")
