@@ -277,7 +277,6 @@ def main():
         precision=args.precision,
         callbacks=callbacks,
         logger=logger,
-        ckpt_path=args.resume_from_checkpoint,  # Changed from resume_from_checkpoint in PL 2.0+
         log_every_n_steps=10,
         val_check_interval=0.5,  # Validate twice per epoch
         gradient_clip_val=1.0,  # Gradient clipping for stability
@@ -289,7 +288,8 @@ def main():
     trainer.fit(
         lightning_module,
         train_dataloaders=train_loader,
-        val_dataloaders=val_loader
+        val_dataloaders=val_loader,
+        ckpt_path=args.resume_from_checkpoint  # Pass checkpoint path to fit() method
     )
     
     print("Training completed!")
