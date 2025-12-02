@@ -2,7 +2,7 @@
 Video Dataset Module for VideoMAE Training
 
 This module implements a PyTorch Dataset class for loading and processing video files
-for VideoMAE training. Videos are expected to be 224x224x3 and are processed by:
+for VideoMAE training using torchvision. Videos are expected to be 224x224x3 and are processed by:
 1. Randomly sampling 32 consecutive frames
 2. Temporally downsampling with stride 2 to get 16 frames
 """
@@ -10,15 +10,14 @@ for VideoMAE training. Videos are expected to be 224x224x3 and are processed by:
 import torch
 from torch.utils.data import Dataset
 import pandas as pd
-import cv2
-import numpy as np
+import torchvision.io
 from typing import Optional, Callable
 import random
 
 
 class VideoDataset(Dataset):
     """
-    Dataset class for loading videos from CSV file paths.
+    Dataset class for loading videos from CSV file paths using torchvision.
     
     Args:
         csv_file (str): Path to CSV file containing video file paths (one per line)
@@ -65,7 +64,7 @@ class VideoDataset(Dataset):
     
     def __getitem__(self, idx: int) -> torch.Tensor:
         """
-        Load and process a video.
+        Load and process a video using torchvision.
         
         Args:
             idx (int): Index of the video to load
@@ -78,46 +77,46 @@ class VideoDataset(Dataset):
         """
         video_path = self.video_paths[idx]
         
-        # Load video frames using OpenCV
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            raise ValueError(f"Could not open video file: {video_path}")
+        # Load video using torchvision
+        # read_video returns (video, audio, info) where video is (T, H, W, C) in RGB, uint8
+        try:
+            video, audio, info = torchvision.io.read_video(video_path)
+        except Exception as e:
+            raise ValueError(f"Could not load video file: {video_path}. Error: {e}")
         
-        frames = []
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            # Convert BGR to RGB
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frames.append(frame)
+        # video is in (T, H, W, C) format, convert to float and normalize to [0, 1]
+        video = video.float() / 255.0
         
-        cap.release()
+        # Rearrange from (T, H, W, C) to (T, C, H, W) for easier manipulation
+        video = video.permute(0, 3, 1, 2)  # (T, C, H, W)
+        
+        # Get number of frames
+        num_frames = video.shape[0]
         
         # Check if video has enough frames
-        if len(frames) < self.num_frames_to_sample:
+        if num_frames < self.num_frames_to_sample:
             # If not enough frames, pad by repeating the last frame
-            num_padding = self.num_frames_to_sample - len(frames)
-            frames.extend([frames[-1]] * num_padding)
+            num_padding = self.num_frames_to_sample - num_frames
+            last_frame = video[-1:].expand(num_padding, -1, -1, -1)  # (num_padding, C, H, W)
+            video = torch.cat([video, last_frame], dim=0)
+            num_frames = video.shape[0]
         
         # Randomly sample num_frames_to_sample consecutive frames
-        max_start_idx = len(frames) - self.num_frames_to_sample
+        max_start_idx = num_frames - self.num_frames_to_sample
         if max_start_idx < 0:
             start_idx = 0
         else:
             start_idx = random.randint(0, max_start_idx)
         
-        sampled_frames = frames[start_idx:start_idx + self.num_frames_to_sample]
+        # Extract consecutive frames: (num_frames_to_sample, C, H, W)
+        sampled_frames = video[start_idx:start_idx + self.num_frames_to_sample]
         
         # Temporally downsample with stride
-        downsampled_frames = sampled_frames[::self.temporal_stride]
+        # Select every temporal_stride-th frame
+        downsampled_frames = sampled_frames[::self.temporal_stride]  # (16, C, H, W)
         
-        # Convert to numpy array and normalize to [0, 1]
-        video_array = np.stack(downsampled_frames, axis=0)  # Shape: (T, H, W, C)
-        video_array = video_array.astype(np.float32) / 255.0
-        
-        # Convert to tensor and rearrange to (C, T, H, W)
-        video_tensor = torch.from_numpy(video_array).permute(3, 0, 1, 2)  # (C, T, H, W)
+        # Rearrange to (C, T, H, W) format
+        video_tensor = downsampled_frames.permute(1, 0, 2, 3)  # (C, T, H, W)
         
         # Apply transform if provided
         if self.transform is not None:

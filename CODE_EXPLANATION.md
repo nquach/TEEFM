@@ -35,7 +35,13 @@ The architecture supports three Vision Transformer backbones:
 
 #### Class: `VideoDataset`
 
-**Purpose**: PyTorch Dataset class for loading and processing video files from CSV file paths.
+**Purpose**: PyTorch Dataset class for loading and processing video files from CSV file paths using torchvision.
+
+**Implementation Note**: This module uses `torchvision.io.read_video()` instead of OpenCV for video loading. Benefits include:
+- **Native PyTorch Integration**: All operations use PyTorch tensors (no numpy/OpenCV conversions)
+- **RGB by Default**: torchvision returns videos in RGB format (no BGR→RGB conversion needed)
+- **Better Performance**: Direct tensor operations without intermediate conversions
+- **Simpler Code**: Fewer dependencies and cleaner implementation
 
 #### `__init__` Method
 
@@ -85,49 +91,60 @@ def __getitem__(self, idx: int) -> torch.Tensor:
 
 1. **Load Video**:
    ```python
-   cap = cv2.VideoCapture(video_path)
+   video, audio, info = torchvision.io.read_video(video_path)
    ```
-   - Opens video file using OpenCV
-   - Reads all frames sequentially
-   - Converts each frame from BGR (OpenCV default) to RGB color space
-   - Stores frames in a list
+   - Loads video file using torchvision's `read_video()` function
+   - Returns video tensor in `(T, H, W, C)` format, already in RGB color space
+   - Video is returned as uint8 tensor (values 0-255)
+   - **Why torchvision?**: Native PyTorch integration, no color space conversion needed
+   - **Benefits**: All operations stay in PyTorch tensors, better performance
 
-2. **Handle Insufficient Frames**:
+2. **Normalize and Rearrange**:
    ```python
-   if len(frames) < self.num_frames_to_sample:
-       num_padding = self.num_frames_to_sample - len(frames)
-       frames.extend([frames[-1]] * num_padding)
+   video = video.float() / 255.0  # Normalize to [0, 1]
+   video = video.permute(0, 3, 1, 2)  # (T, C, H, W)
+   ```
+   - Converts from uint8 to float32 and normalizes to [0, 1]
+   - Rearranges from `(T, H, W, C)` to `(T, C, H, W)` for easier manipulation
+   - All operations use native PyTorch tensors (no numpy conversion)
+
+3. **Handle Insufficient Frames**:
+   ```python
+   if num_frames < self.num_frames_to_sample:
+       num_padding = self.num_frames_to_sample - num_frames
+       last_frame = video[-1:].expand(num_padding, -1, -1, -1)
+       video = torch.cat([video, last_frame], dim=0)
    ```
    - If video has fewer than 32 frames, pads by repeating the last frame
+   - Uses PyTorch's `expand()` and `cat()` for efficient tensor operations
    - Ensures we always have enough frames for sampling
 
-3. **Random Sampling**:
+4. **Random Sampling**:
    ```python
    start_idx = random.randint(0, max_start_idx)
-   sampled_frames = frames[start_idx:start_idx + self.num_frames_to_sample]
+   sampled_frames = video[start_idx:start_idx + self.num_frames_to_sample]
    ```
    - Randomly selects a starting index
-   - Samples 32 consecutive frames from that position
+   - Samples 32 consecutive frames using tensor slicing
    - **Why random?**: Provides data augmentation - different clips from same video each epoch
+   - Result: `(32, C, H, W)` tensor
 
-4. **Temporal Downsampling**:
+5. **Temporal Downsampling**:
    ```python
-   downsampled_frames = sampled_frames[::self.temporal_stride]
+   downsampled_frames = sampled_frames[::self.temporal_stride]  # (16, C, H, W)
    ```
-   - Applies stride of 2: takes every 2nd frame
+   - Applies stride of 2: takes every 2nd frame using tensor slicing
    - Reduces 32 frames to 16 frames
    - **Why?**: Reduces computational cost while maintaining temporal information
 
-5. **Normalization and Tensor Conversion**:
+6. **Final Rearrangement**:
    ```python
-   video_array = np.stack(downsampled_frames, axis=0)  # (T, H, W, C)
-   video_array = video_array.astype(np.float32) / 255.0  # Normalize to [0, 1]
-   video_tensor = torch.from_numpy(video_array).permute(3, 0, 1, 2)  # (C, T, H, W)
+   video_tensor = downsampled_frames.permute(1, 0, 2, 3)  # (C, T, H, W)
    ```
-   - Stacks frames into numpy array: shape `(16, 224, 224, 3)`
-   - Normalizes pixel values from [0, 255] to [0, 1]
-   - Converts to PyTorch tensor
-   - Permutes dimensions: `(3, 16, 224, 224)` = `(Channels, Time, Height, Width)`
+   - Rearranges from `(T, C, H, W)` to `(C, T, H, W)` format
+   - Final output: `(3, 16, 224, 224)` = `(Channels, Time, Height, Width)`
+
+**Returns**: Tensor of shape `(3, 16, 224, 224)` ready for model input.
 
 **Returns**: Tensor of shape `(3, 16, 224, 224)` ready for model input.
 
@@ -135,6 +152,8 @@ def __getitem__(self, idx: int) -> torch.Tensor:
 - Channels first (C, T, H, W) is standard for PyTorch
 - Normalized values help with training stability
 - 16 frames is a good balance between temporal information and computational cost
+- All operations use native PyTorch tensors (no numpy/OpenCV conversions)
+- torchvision provides better integration with PyTorch ecosystem
 
 ---
 
@@ -1137,10 +1156,12 @@ def main():
 1. CSV File (video paths)
    ↓
 2. VideoDataset.__getitem__()
-   - Load video with OpenCV
-   - Sample 32 consecutive frames
+   - Load video with torchvision.io.read_video()
+   - Normalize to [0, 1] and rearrange to (T, C, H, W)
+   - Pad if insufficient frames
+   - Sample 32 consecutive frames (random start)
    - Temporal downsampling (stride=2) → 16 frames
-   - Normalize to [0, 1]
+   - Rearrange to (C, T, H, W)
    - Tensor: (3, 16, 224, 224)
    ↓
 3. DataLoader batches: (B, 3, 16, 224, 224)
