@@ -12,6 +12,7 @@ It supports:
 import os
 import sys
 import argparse
+import yaml
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
@@ -28,33 +29,44 @@ from models.videomae import VideoMAE
 from training.lightning_module import VideoMAELightningModule
 
 
+def load_config(config_path):
+    """Load configuration from YAML file."""
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    return config
+
+
 def parse_args():
-    """Parse command line arguments."""
+    """Parse command line arguments, optionally loading from config file."""
     parser = argparse.ArgumentParser(description='Train VideoMAE with EVEREST method')
     
+    # Config file argument (must be first to load defaults)
+    parser.add_argument('--config', type=str, default=None,
+                        help='Path to YAML configuration file (default: config/config.yaml)')
+    
     # Data arguments
-    parser.add_argument('--train_csv', type=str, default='mp4_paths.csv',
+    parser.add_argument('--train_csv', type=str, default=None,
                         help='Path to training CSV file')
-    parser.add_argument('--val_csv', type=str, default='val500_2023-2024.csv',
+    parser.add_argument('--val_csv', type=str, default=None,
                         help='Path to validation CSV file')
-    parser.add_argument('--batch_size', type=int, default=8,
+    parser.add_argument('--batch_size', type=int, default=None,
                         help='Batch size for training')
-    parser.add_argument('--num_workers', type=int, default=4,
+    parser.add_argument('--num_workers', type=int, default=None,
                         help='Number of data loading workers')
-    parser.add_argument('--num_frames_to_sample', type=int, default=32,
+    parser.add_argument('--num_frames_to_sample', type=int, default=None,
                         help='Number of consecutive frames to sample')
-    parser.add_argument('--temporal_stride', type=int, default=2,
+    parser.add_argument('--temporal_stride', type=int, default=None,
                         help='Temporal stride for downsampling')
     
     # Model arguments
-    parser.add_argument('--backbone', type=str, default='vit_s',
+    parser.add_argument('--backbone', type=str, default=None,
                         choices=['vit_s', 'vit_b', 'vit_l'],
                         help='Vision Transformer backbone')
-    parser.add_argument('--img_size', type=int, default=224,
+    parser.add_argument('--img_size', type=int, default=None,
                         help='Input image size')
-    parser.add_argument('--patch_size', type=int, default=16,
+    parser.add_argument('--patch_size', type=int, default=None,
                         help='Patch size')
-    parser.add_argument('--mask_ratio', type=float, default=0.75,
+    parser.add_argument('--mask_ratio', type=float, default=None,
                         help='Ratio of patches to mask')
     parser.add_argument('--norm_pix_loss', action='store_true',
                         help='Normalize pixel loss')
@@ -62,39 +74,120 @@ def parse_args():
                         help='Path to pretrained weights')
     
     # Training arguments
-    parser.add_argument('--learning_rate', type=float, default=1e-4,
+    parser.add_argument('--learning_rate', type=float, default=None,
                         help='Learning rate')
-    parser.add_argument('--weight_decay', type=float, default=0.05,
+    parser.add_argument('--weight_decay', type=float, default=None,
                         help='Weight decay')
-    parser.add_argument('--warmup_steps', type=int, default=1000,
+    parser.add_argument('--warmup_steps', type=int, default=None,
                         help='Number of warmup steps')
-    parser.add_argument('--max_epochs', type=int, default=100,
+    parser.add_argument('--max_epochs', type=int, default=None,
                         help='Maximum number of epochs')
     parser.add_argument('--track_grad_norm', action='store_true',
                         help='Track L2 norm of gradients')
     
     # Checkpointing arguments
-    parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints',
+    parser.add_argument('--checkpoint_dir', type=str, default=None,
                         help='Directory to save checkpoints')
-    parser.add_argument('--checkpoint_prefix', type=str, default='videomae',
+    parser.add_argument('--checkpoint_prefix', type=str, default=None,
                         help='Prefix for checkpoint filenames')
     parser.add_argument('--resume_from_checkpoint', type=str, default=None,
                         help='Path to checkpoint to resume from')
     
     # Logging arguments
-    parser.add_argument('--log_dir', type=str, default='./logs',
+    parser.add_argument('--log_dir', type=str, default=None,
                         help='Directory for TensorBoard logs')
-    parser.add_argument('--experiment_name', type=str, default='videomae_experiment',
+    parser.add_argument('--experiment_name', type=str, default=None,
                         help='Experiment name for logging')
     
     # Hardware arguments
-    parser.add_argument('--gpus', type=int, default=1,
+    parser.add_argument('--gpus', type=int, default=None,
                         help='Number of GPUs to use')
-    parser.add_argument('--precision', type=int, default=32,
+    parser.add_argument('--precision', type=int, default=None,
                         choices=[16, 32],
                         help='Training precision (16 or 32)')
     
-    return parser.parse_args()
+    # Parse arguments
+    args = parser.parse_args()
+    
+    # Load config file if specified or use default
+    config_path = args.config
+    if config_path is None:
+        # Try default config path
+        default_config = os.path.join(project_root, 'config', 'config.yaml')
+        if os.path.exists(default_config):
+            config_path = default_config
+    
+    config = {}
+    if config_path and os.path.exists(config_path):
+        print(f"Loading configuration from {config_path}")
+        config = load_config(config_path)
+    else:
+        print("No config file found, using command-line arguments and defaults")
+    
+    # Merge config with command-line arguments (CLI args override config)
+    # Data config
+    if args.train_csv is None:
+        args.train_csv = config.get('data', {}).get('train_csv', 'mp4_paths.csv')
+    if args.val_csv is None:
+        args.val_csv = config.get('data', {}).get('val_csv', 'val500_2023-2024.csv')
+    if args.batch_size is None:
+        args.batch_size = config.get('data', {}).get('batch_size', 8)
+    if args.num_workers is None:
+        args.num_workers = config.get('data', {}).get('num_workers', 4)
+    if args.num_frames_to_sample is None:
+        args.num_frames_to_sample = config.get('data', {}).get('num_frames_to_sample', 32)
+    if args.temporal_stride is None:
+        args.temporal_stride = config.get('data', {}).get('temporal_stride', 2)
+    
+    # Model config
+    if args.backbone is None:
+        args.backbone = config.get('model', {}).get('backbone', 'vit_s')
+    if args.img_size is None:
+        args.img_size = config.get('model', {}).get('img_size', 224)
+    if args.patch_size is None:
+        args.patch_size = config.get('model', {}).get('patch_size', 16)
+    if args.mask_ratio is None:
+        args.mask_ratio = config.get('model', {}).get('mask_ratio', 0.75)
+    if not args.norm_pix_loss:  # Only set from config if not specified via CLI
+        args.norm_pix_loss = config.get('model', {}).get('norm_pix_loss', False)
+    if args.pretrained is None:
+        pretrained_path = config.get('model', {}).get('pretrained')
+        args.pretrained = pretrained_path if pretrained_path else None
+    
+    # Training config
+    if args.learning_rate is None:
+        args.learning_rate = config.get('training', {}).get('learning_rate', 1e-4)
+    if args.weight_decay is None:
+        args.weight_decay = config.get('training', {}).get('weight_decay', 0.05)
+    if args.warmup_steps is None:
+        args.warmup_steps = config.get('training', {}).get('warmup_steps', 1000)
+    if args.max_epochs is None:
+        args.max_epochs = config.get('training', {}).get('max_epochs', 100)
+    if not args.track_grad_norm:  # Only set from config if not specified via CLI
+        args.track_grad_norm = config.get('training', {}).get('track_grad_norm', False)
+    
+    # Checkpointing config
+    if args.checkpoint_dir is None:
+        args.checkpoint_dir = config.get('checkpointing', {}).get('checkpoint_dir', './checkpoints')
+    if args.checkpoint_prefix is None:
+        args.checkpoint_prefix = config.get('checkpointing', {}).get('checkpoint_prefix', 'videomae')
+    if args.resume_from_checkpoint is None:
+        resume_path = config.get('checkpointing', {}).get('resume_from_checkpoint')
+        args.resume_from_checkpoint = resume_path if resume_path else None
+    
+    # Logging config
+    if args.log_dir is None:
+        args.log_dir = config.get('logging', {}).get('log_dir', './logs')
+    if args.experiment_name is None:
+        args.experiment_name = config.get('logging', {}).get('experiment_name', 'videomae_experiment')
+    
+    # Hardware config
+    if args.gpus is None:
+        args.gpus = config.get('hardware', {}).get('gpus', 1)
+    if args.precision is None:
+        args.precision = config.get('hardware', {}).get('precision', 32)
+    
+    return args
 
 
 def create_data_loaders(args):

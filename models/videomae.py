@@ -411,7 +411,7 @@ class VideoMAE(nn.Module):
         self.load_state_dict(new_state_dict, strict=False)
         print(f"Loaded pretrained weights from {checkpoint_path}")
     
-    def random_masking(self, x: torch.Tensor, mask_ratio: float) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def random_masking(self, x: torch.Tensor, mask_ratio: float) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Random masking for EVEREST training.
         
@@ -423,6 +423,7 @@ class VideoMAE(nn.Module):
             visible_patches: Visible (unmasked) patches
             mask: Binary mask (1 for masked, 0 for visible)
             ids_restore: Indices to restore original order
+            ids_keep: Indices of kept (visible) patches
         """
         B, N, D = x.shape
         
@@ -445,7 +446,7 @@ class VideoMAE(nn.Module):
         mask[:, :len_keep] = 0
         mask = torch.gather(mask, dim=1, index=ids_restore)
         
-        return visible_patches, mask, ids_restore
+        return visible_patches, mask, ids_restore, ids_keep
     
     def forward_encoder(self, x: torch.Tensor, mask_ratio: float) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -464,15 +465,35 @@ class VideoMAE(nn.Module):
         patches = self.encoder.patch_embed(x)  # (B, num_patches, embed_dim)
         
         # Apply masking
-        visible_patches, mask, ids_restore = self.random_masking(patches, mask_ratio)
+        visible_patches, mask, ids_restore, ids_keep = self.random_masking(patches, mask_ratio)
         
         # Add class token
         B = visible_patches.shape[0]
         cls_tokens = self.encoder.cls_token.expand(B, -1, -1)
-        visible_patches = torch.cat([cls_tokens, visible_patches], dim=1)
         
-        # Add positional encoding
-        visible_patches = self.encoder.pos_embed(visible_patches)
+        # Get positional embeddings for visible patches
+        # pos_embed shape: (1, num_patches + 1, embed_dim)
+        # We need: class token pos (index 0) + visible patch positions
+        pos_embed = self.encoder.pos_embed.pos_embed  # (1, num_patches + 1, embed_dim)
+        
+        # Get positional embedding for class token (index 0)
+        cls_pos_embed = pos_embed[:, 0:1, :]  # (1, 1, embed_dim)
+        
+        # Get positional embeddings for visible patches
+        # ids_keep contains indices in range [0, num_patches), but pos_embed indices are [1, num_patches+1)
+        # because index 0 is for class token, so we add 1
+        ids_keep_pos = ids_keep + 1  # Shift by 1 to account for class token
+        patch_pos_embed = torch.gather(
+            pos_embed[:, 1:, :],  # Skip class token position
+            dim=1,
+            index=ids_keep_pos.unsqueeze(-1).expand(-1, -1, pos_embed.shape[-1])
+        )  # (B, len_keep, embed_dim)
+        
+        # Concatenate class token and patch positional embeddings
+        pos_embed_visible = torch.cat([cls_pos_embed.expand(B, -1, -1), patch_pos_embed], dim=1)
+        
+        # Combine patches with positional encoding
+        visible_patches = torch.cat([cls_tokens, visible_patches], dim=1) + pos_embed_visible
         visible_patches = self.encoder.pos_drop(visible_patches)
         
         # Apply encoder blocks

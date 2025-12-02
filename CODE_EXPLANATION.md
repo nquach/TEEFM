@@ -1,59 +1,31 @@
-# VideoMAE Codebase Explanation
+# Complete Code Explanation for VideoMAE Training Codebase
 
-This document provides a comprehensive explanation of all components in the VideoMAE training codebase.
+This document provides a comprehensive explanation of all components in the VideoMAE training codebase, organized by module.
 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Project Structure](#project-structure)
-3. [Data Module](#data-module)
-4. [Model Architecture](#model-architecture)
-5. [Training Module](#training-module)
-6. [Training Script](#training-script)
-7. [Configuration](#configuration)
-8. [Data Flow](#data-flow)
-9. [Training Process](#training-process)
+2. [Data Module (`data/video_dataset.py`)](#data-module)
+3. [Model Module (`models/videomae.py`)](#model-module)
+4. [Training Module (`training/lightning_module.py`)](#training-module)
+5. [Training Script (`training/train.py`)](#training-script)
+6. [Data Flow and Training Process](#data-flow-and-training-process)
 
 ---
 
 ## Overview
 
-This codebase implements a **Video Masked Autoencoder (VideoMAE)** using the **EVEREST** training method. The model learns representations from unlabeled video data by:
+This codebase implements a **Video Masked Autoencoder (VideoMAE)** using the **EVEREST** training method. The model learns video representations by:
 
-1. Randomly masking 75% of video patches
-2. Encoding only the visible (unmasked) patches
-3. Reconstructing the masked patches using a decoder
-4. Computing reconstruction loss only on masked patches
+1. **Masking**: Randomly masking 75% of video patches
+2. **Encoding**: Processing only visible (unmasked) patches through a Vision Transformer encoder
+3. **Decoding**: Reconstructing all patches (visible + masked) using a lightweight decoder
+4. **Learning**: Computing reconstruction loss only on masked patches
 
-The architecture uses a **Vision Transformer (ViT)** backbone with options for:
+The architecture supports three Vision Transformer backbones:
 - **ViT-S** (Small): 384 embedding dim, 12 layers, 6 heads
-- **ViT-B** (Base): 768 embedding dim, 12 layers, 12 heads
+- **ViT-B** (Base): 768 embedding dim, 12 layers, 12 heads  
 - **ViT-L** (Large): 1024 embedding dim, 24 layers, 16 heads
-
----
-
-## Project Structure
-
-```
-TEEFM/
-├── data/
-│   ├── __init__.py
-│   └── video_dataset.py          # Video dataset and data loading
-├── models/
-│   ├── __init__.py
-│   └── videomae.py                # VideoMAE model implementation
-├── training/
-│   ├── __init__.py
-│   ├── lightning_module.py        # PyTorch Lightning wrapper
-│   └── train.py                   # Main training script
-├── config/
-│   └── config.yaml                # Configuration file
-├── mp4_paths.csv                   # Training video paths
-├── val500_2023-2024.csv           # Validation video paths
-├── requirements.txt                # Python dependencies
-├── README.md                       # Usage instructions
-└── CODE_EXPLANATION.md             # This file
-```
 
 ---
 
@@ -61,222 +33,678 @@ TEEFM/
 
 ### File: `data/video_dataset.py`
 
-#### `VideoDataset` Class
+#### Class: `VideoDataset`
 
-**Purpose**: Loads and processes video files for training/validation.
+**Purpose**: PyTorch Dataset class for loading and processing video files from CSV file paths.
 
-**Key Components**:
+#### `__init__` Method
 
-1. **Initialization** (`__init__`):
-   - Reads video paths from CSV file (handles both with/without headers)
-   - Configures frame sampling parameters:
-     - `num_frames_to_sample`: Number of consecutive frames to sample (default: 32)
-     - `temporal_stride`: Stride for temporal downsampling (default: 2)
-     - `frame_size`: Expected frame dimensions (default: 224x224)
-
-2. **Video Loading** (`__getitem__`):
-   - Uses OpenCV to read video frames
-   - Converts BGR to RGB color space
-   - Handles videos with insufficient frames by padding with last frame
-   - **Random Sampling**: Randomly selects 32 consecutive frames from the video
-   - **Temporal Downsampling**: Applies stride of 2 to get 16 frames
-   - **Normalization**: Converts pixel values from [0, 255] to [0, 1]
-   - **Tensor Format**: Returns tensor of shape `(C, T, H, W)` = `(3, 16, 224, 224)`
-
-**Data Processing Pipeline**:
-```
-Video File → Load Frames → Sample 32 Frames → Downsample (stride=2) → 16 Frames → Normalize → Tensor
+```python
+def __init__(
+    self,
+    csv_file: str,
+    transform: Optional[Callable] = None,
+    num_frames_to_sample: int = 32,
+    temporal_stride: int = 2,
+    frame_size: tuple = (224, 224)
+)
 ```
 
-**Important Notes**:
-- Videos are expected to already be 224x224x3 (no resizing needed)
-- Random sampling ensures data augmentation
-- Temporal downsampling reduces computational cost while maintaining temporal information
+**What it does**:
+1. **Reads CSV file**: Loads video file paths from CSV
+   - Handles both CSV files with and without headers
+   - If no header, assumes first column contains paths
+   - If header exists, looks for 'path' column or uses first column
+   
+2. **Stores configuration**:
+   - `num_frames_to_sample`: Number of consecutive frames to sample (default: 32)
+   - `temporal_stride`: Stride for temporal downsampling (default: 2)
+   - `frame_size`: Expected frame dimensions (default: 224x224)
+   - Calculates final number of frames: `num_frames = 32 // 2 = 16`
+
+**Why**: Provides flexible CSV reading and stores processing parameters for video loading.
+
+#### `__len__` Method
+
+```python
+def __len__(self) -> int:
+    return len(self.video_paths)
+```
+
+**What it does**: Returns the total number of videos in the dataset.
+
+**Why**: Required by PyTorch Dataset protocol to enable iteration and batching.
+
+#### `__getitem__` Method
+
+```python
+def __getitem__(self, idx: int) -> torch.Tensor:
+```
+
+**What it does** (step by step):
+
+1. **Load Video**:
+   ```python
+   cap = cv2.VideoCapture(video_path)
+   ```
+   - Opens video file using OpenCV
+   - Reads all frames sequentially
+   - Converts each frame from BGR (OpenCV default) to RGB color space
+   - Stores frames in a list
+
+2. **Handle Insufficient Frames**:
+   ```python
+   if len(frames) < self.num_frames_to_sample:
+       num_padding = self.num_frames_to_sample - len(frames)
+       frames.extend([frames[-1]] * num_padding)
+   ```
+   - If video has fewer than 32 frames, pads by repeating the last frame
+   - Ensures we always have enough frames for sampling
+
+3. **Random Sampling**:
+   ```python
+   start_idx = random.randint(0, max_start_idx)
+   sampled_frames = frames[start_idx:start_idx + self.num_frames_to_sample]
+   ```
+   - Randomly selects a starting index
+   - Samples 32 consecutive frames from that position
+   - **Why random?**: Provides data augmentation - different clips from same video each epoch
+
+4. **Temporal Downsampling**:
+   ```python
+   downsampled_frames = sampled_frames[::self.temporal_stride]
+   ```
+   - Applies stride of 2: takes every 2nd frame
+   - Reduces 32 frames to 16 frames
+   - **Why?**: Reduces computational cost while maintaining temporal information
+
+5. **Normalization and Tensor Conversion**:
+   ```python
+   video_array = np.stack(downsampled_frames, axis=0)  # (T, H, W, C)
+   video_array = video_array.astype(np.float32) / 255.0  # Normalize to [0, 1]
+   video_tensor = torch.from_numpy(video_array).permute(3, 0, 1, 2)  # (C, T, H, W)
+   ```
+   - Stacks frames into numpy array: shape `(16, 224, 224, 3)`
+   - Normalizes pixel values from [0, 255] to [0, 1]
+   - Converts to PyTorch tensor
+   - Permutes dimensions: `(3, 16, 224, 224)` = `(Channels, Time, Height, Width)`
+
+**Returns**: Tensor of shape `(3, 16, 224, 224)` ready for model input.
+
+**Why this format**: 
+- Channels first (C, T, H, W) is standard for PyTorch
+- Normalized values help with training stability
+- 16 frames is a good balance between temporal information and computational cost
 
 ---
 
-## Model Architecture
+## Model Module
 
 ### File: `models/videomae.py`
 
-The VideoMAE model consists of several components:
+This module contains the core VideoMAE architecture with several components.
 
-### 1. `PatchEmbed` Class
+### Class: `PatchEmbed`
 
-**Purpose**: Converts video into patch embeddings.
+**Purpose**: Converts video into patch embeddings using 3D convolution.
 
-**How it works**:
-- Uses 3D convolution to extract spatio-temporal patches
-- Input: `(B, C, T, H, W)` = `(batch, 3, 16, 224, 224)`
-- Kernel: `(t_patch_size, patch_size, patch_size)` = `(2, 16, 16)`
-- Stride: `(2, 16, 16)` (matches kernel size)
-- Output: `(B, num_patches, embed_dim)`
+#### `__init__` Method
 
-**Patch Calculation**:
-- Spatial patches per frame: `(224 / 16)² = 14² = 196`
-- Temporal patches: `16 / 2 = 8`
-- Total patches: `8 × 196 = 1,568`
+```python
+def __init__(
+    self,
+    img_size: int = 224,
+    patch_size: int = 16,
+    in_chans: int = 3,
+    embed_dim: int = 768,
+    t_patch_size: int = 2
+)
+```
 
-### 2. `PositionalEncoding` Class
+**What it does**:
+1. **Calculates patch dimensions**:
+   - Spatial patches per frame: `(224 // 16)² = 14² = 196` patches
+   - Temporal patches: `16 // 2 = 8` temporal segments
+   - Total patches: `8 × 196 = 1,568` patches
+
+2. **Creates 3D Convolution**:
+   ```python
+   self.proj = nn.Conv3d(
+       in_chans, embed_dim,
+       kernel_size=(t_patch_size, patch_size, patch_size),  # (2, 16, 16)
+       stride=(t_patch_size, patch_size, patch_size)        # (2, 16, 16)
+   )
+   ```
+   - **Kernel size**: `(2, 16, 16)` extracts 2×16×16 spatio-temporal patches
+   - **Stride**: Same as kernel size, so no overlap
+   - **Why 3D?**: Captures both spatial (H×W) and temporal (T) information together
+
+#### `forward` Method
+
+```python
+def forward(self, x: torch.Tensor) -> torch.Tensor:
+    # Input: (B, C, T, H, W) = (B, 3, 16, 224, 224)
+    x = self.proj(x)  # (B, embed_dim, T', H', W') = (B, 768, 8, 14, 14)
+    x = x.flatten(2).transpose(1, 2)  # (B, num_patches, embed_dim) = (B, 1568, 768)
+    return x
+```
+
+**What it does**:
+1. Applies 3D convolution to extract patches
+2. Flattens spatial and temporal dimensions
+3. Rearranges to sequence format: `(batch, num_patches, embed_dim)`
+
+**Why**: Transforms video into a sequence of patch embeddings that transformers can process.
+
+---
+
+### Class: `PositionalEncoding`
 
 **Purpose**: Adds learnable positional embeddings to patches.
 
-**Implementation**:
-- Learnable parameter tensor: `(1, num_patches, embed_dim)`
-- Initialized with truncated normal distribution (std=0.02)
-- Added element-wise to patch embeddings
+#### `__init__` Method
 
-### 3. `TransformerBlock` Class
+```python
+def __init__(self, num_patches: int, embed_dim: int):
+    self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
+    nn.init.trunc_normal_(self.pos_embed, std=0.02)
+```
+
+**What it does**:
+- Creates learnable parameter tensor: `(1, num_patches, embed_dim)`
+- Initializes with truncated normal distribution (std=0.02)
+- **Why learnable?**: Model learns optimal positional encodings during training
+
+#### `forward` Method
+
+```python
+def forward(self, x: torch.Tensor) -> torch.Tensor:
+    return x + self.pos_embed
+```
+
+**What it does**: Element-wise addition of positional embeddings to input.
+
+**Why**: Transformers need positional information since they process sequences without inherent order.
+
+---
+
+### Class: `TransformerBlock`
 
 **Purpose**: Standard transformer block with self-attention and MLP.
 
-**Architecture**:
+#### `__init__` Method
+
+```python
+def __init__(
+    self,
+    dim: int,
+    num_heads: int,
+    mlp_ratio: float = 4.0,
+    qkv_bias: bool = False,
+    drop: float = 0.0,
+    attn_drop: float = 0.0,
+    ...
+)
 ```
-Input → LayerNorm → MultiheadAttention → Residual → LayerNorm → MLP → Residual → Output
+
+**What it creates**:
+
+1. **Layer Normalization**: `self.norm1` and `self.norm2`
+   - Normalizes inputs before attention and MLP
+   - Helps with training stability
+
+2. **Multi-Head Attention**:
+   ```python
+   self.attn = nn.MultiheadAttention(
+       dim, num_heads, dropout=attn_drop, bias=qkv_bias, batch_first=True
+   )
+   ```
+   - **Compatibility**: Tries `batch_first=True` (PyTorch >= 1.9), falls back if not available
+   - **Why multi-head?**: Allows model to attend to different types of information simultaneously
+
+3. **MLP (Feedforward Network)**:
+   ```python
+   self.mlp = nn.Sequential(
+       nn.Linear(dim, mlp_hidden_dim),      # Expand: 768 -> 3072
+       act_layer(),                          # GELU activation
+       nn.Dropout(drop),                     # Regularization
+       nn.Linear(mlp_hidden_dim, dim),       # Contract: 3072 -> 768
+       nn.Dropout(drop)
+   )
+   ```
+   - Hidden dimension: `dim × mlp_ratio` (typically 4x expansion)
+   - **Why expansion?**: Provides model capacity for complex transformations
+
+#### `forward` Method
+
+```python
+def forward(self, x: torch.Tensor) -> torch.Tensor:
+    # Self-attention with residual
+    x_norm = self.norm1(x)
+    attn_out, _ = self.attn(x_norm, x_norm, x_norm)
+    x = x + attn_out  # Residual connection
+    
+    # MLP with residual
+    x = x + self.mlp(self.norm2(x))  # Residual connection
+    return x
 ```
 
-**Components**:
-- **Self-Attention**: Multi-head attention mechanism
-  - Compatible with both old and new PyTorch versions
-  - Uses `batch_first=True` if available, otherwise transposes
-- **MLP**: Two-layer feedforward network
-  - Hidden dimension: `embed_dim × mlp_ratio` (typically 4x)
-  - Activation: GELU
-  - Dropout for regularization
+**What it does**:
+1. **Self-Attention**: 
+   - Normalizes input
+   - Computes attention (each patch attends to all patches)
+   - Adds residual connection
+   
+2. **MLP**:
+   - Normalizes input
+   - Applies feedforward network
+   - Adds residual connection
 
-### 4. `VisionTransformer` Class
+**Why residual connections?**: Help with gradient flow and enable deeper networks.
 
-**Purpose**: Vision Transformer encoder backbone.
+**Architecture**: `Input → Norm → Attention → +Input → Norm → MLP → +Input → Output`
 
-**Architecture Flow**:
-1. **Patch Embedding**: Convert video to patches
-2. **Add Class Token**: Prepend learnable class token (for compatibility)
-3. **Positional Encoding**: Add positional embeddings
-4. **Transformer Blocks**: Apply N transformer blocks (12 for ViT-S/B, 24 for ViT-L)
-5. **Layer Normalization**: Final normalization
+---
 
-**Key Features**:
-- Supports different backbone sizes (S, B, L)
-- Configurable depth, attention heads, and embedding dimensions
-- Proper weight initialization
+### Class: `VisionTransformer`
 
-### 5. `VideoMAE` Class
+**Purpose**: Vision Transformer encoder backbone for VideoMAE.
+
+#### `__init__` Method
+
+**What it creates**:
+
+1. **Patch Embedding**: `self.patch_embed`
+   - Converts video to patch embeddings
+
+2. **Class Token**: `self.cls_token`
+   - Learnable token (for compatibility, though not heavily used in MAE)
+   - Shape: `(1, 1, embed_dim)`
+
+3. **Positional Encoding**: `self.pos_embed`
+   - Size: `num_patches + 1` (patches + class token)
+
+4. **Transformer Blocks**: `self.blocks`
+   - List of N transformer blocks (12 for ViT-S/B, 24 for ViT-L)
+
+5. **Final Normalization**: `self.norm`
+
+**Weight Initialization**:
+- Class token: Truncated normal (std=0.02)
+- Linear layers: Truncated normal (std=0.02)
+- LayerNorm: Bias=0, Weight=1
+
+**Why this initialization?**: Standard ViT initialization for stable training.
+
+#### `forward` Method
+
+```python
+def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None):
+    # Patch embedding
+    x = self.patch_embed(x)  # (B, num_patches, embed_dim)
+    
+    # Add class token
+    cls_tokens = self.cls_token.expand(B, -1, -1)
+    x = torch.cat([cls_tokens, x], dim=1)  # (B, num_patches + 1, embed_dim)
+    
+    # Add positional encoding
+    x = self.pos_embed(x)
+    x = self.pos_drop(x)
+    
+    # Apply transformer blocks
+    for block in self.blocks:
+        x = block(x)
+    
+    x = self.norm(x)
+    return x
+```
+
+**What it does**: Standard ViT forward pass (though in VideoMAE, masking happens before this).
+
+---
+
+### Class: `VideoMAE`
 
 **Purpose**: Main VideoMAE model implementing masked autoencoding.
 
-#### Architecture Components:
+#### `__init__` Method
 
-**Encoder**:
-- Full Vision Transformer
-- Processes only visible (unmasked) patches
-- Outputs encoded representations
+**What it creates**:
 
-**Decoder**:
-- Lightweight transformer (4 layers vs 12/24 in encoder)
-- Takes encoded visible patches + masked token placeholders
-- Reconstructs pixel values for all patches
+1. **Encoder**: Full Vision Transformer
+   - Processes visible patches only
+   - Heavy architecture (12-24 layers)
 
-#### Key Methods:
+2. **Decoder**: Lightweight transformer
+   - 4 layers (vs 12-24 in encoder)
+   - Same embedding dimension as encoder
+   - **Why lightweight?**: Only needs to reconstruct, not learn complex features
 
-##### `random_masking(x, mask_ratio)`
-**Purpose**: Randomly masks patches for EVEREST training.
+3. **Decoder Components**:
+   - `decoder_embed`: Projects encoder outputs to decoder dimension
+   - `decoder_pos_embed`: Positional encoding for decoder
+   - `decoder_blocks`: 4 transformer blocks
+   - `decoder_pred`: Linear layer to predict pixel values
 
-**Process**:
-1. Generate random noise for each patch
-2. Sort patches by noise (random shuffle)
-3. Keep first `(1 - mask_ratio) × num_patches` patches (visible)
-4. Mask remaining patches
-5. Return visible patches, binary mask, and restore indices
+**Backbone Configurations**:
+```python
+BACKBONE_CONFIGS = {
+    'vit_s': {'embed_dim': 384, 'depth': 12, 'num_heads': 6},
+    'vit_b': {'embed_dim': 768, 'depth': 12, 'num_heads': 12},
+    'vit_l': {'embed_dim': 1024, 'depth': 24, 'num_heads': 16}
+}
+```
 
-**Example** (mask_ratio=0.75):
-- Total patches: 1,568
-- Visible patches: 392 (25%)
-- Masked patches: 1,176 (75%)
+#### `load_pretrained` Method
 
-##### `forward_encoder(x, mask_ratio)`
-**Purpose**: Encodes visible patches only.
+```python
+def load_pretrained(self, checkpoint_path: str):
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    # Handle different checkpoint formats
+    if 'state_dict' in checkpoint:
+        state_dict = checkpoint['state_dict']
+    elif 'model' in checkpoint:
+        state_dict = checkpoint['model']
+    else:
+        state_dict = checkpoint
+    
+    # Remove 'model.' prefix if present
+    # Load with strict=False to allow partial loading
+    self.load_state_dict(new_state_dict, strict=False)
+```
 
-**Process**:
-1. Extract patches from video
-2. Apply random masking
-3. Add class token to visible patches
-4. Add positional encoding
-5. Pass through encoder transformer blocks
-6. Return encoded patches, mask, and restore indices
+**What it does**: 
+- Loads checkpoint from file
+- Handles different checkpoint formats (PyTorch Lightning, standard, etc.)
+- Removes common prefixes
+- Uses `strict=False` to allow partial loading
 
-##### `forward_decoder(x, ids_restore)`
-**Purpose**: Reconstructs all patches (visible + masked).
+**Why flexible loading?**: Different frameworks save checkpoints in different formats.
 
-**Process**:
-1. Project encoded patches to decoder dimension
-2. Create full sequence with zeros for masked patches
-3. Restore original patch order using `ids_restore`
-4. Add class token and positional encoding
-5. Pass through decoder transformer blocks
-6. Predict pixel values for all patches
+---
 
-##### `patchify(x)`
-**Purpose**: Converts video to patches (for loss computation).
+#### `random_masking` Method
 
-**Process**:
-- Reshapes video tensor into patches
-- Same patch structure as encoder embedding
-- Used to compute target values for reconstruction loss
+```python
+def random_masking(self, x: torch.Tensor, mask_ratio: float):
+    B, N, D = x.shape  # (batch, num_patches, embed_dim)
+    len_keep = int(N * (1 - mask_ratio))  # Number of visible patches
+    
+    # Random shuffle
+    noise = torch.rand(B, N, device=x.device)
+    ids_shuffle = torch.argsort(noise, dim=1)  # Random permutation
+    ids_restore = torch.argsort(ids_shuffle, dim=1)  # Inverse permutation
+    
+    # Keep first len_keep patches
+    ids_keep = ids_shuffle[:, :len_keep]
+    
+    # Get visible patches
+    visible_patches = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).expand(-1, -1, D))
+    
+    # Create mask (1 for masked, 0 for visible)
+    mask = torch.ones(B, N, device=x.device)
+    mask[:, :len_keep] = 0
+    mask = torch.gather(mask, dim=1, index=ids_restore)
+    
+    return visible_patches, mask, ids_restore, ids_keep
+```
 
-##### `compute_loss(pred, target, mask)`
-**Purpose**: Computes reconstruction loss on masked patches only.
+**What it does** (step by step):
 
-**Process**:
-1. Optionally normalize target patches (if `norm_pix_loss=True`)
-2. Compute MSE between predicted and target patches
-3. Apply mask (only compute loss on masked patches)
-4. Return mean loss over masked patches
+1. **Calculate visible patches**: 
+   - If `mask_ratio=0.75` and `N=1568` patches
+   - `len_keep = 1568 × 0.25 = 392` visible patches
+   - `1568 - 392 = 1176` masked patches
+
+2. **Random Shuffle**:
+   - Generates random noise for each patch
+   - Sorts by noise to create random permutation
+   - `ids_shuffle`: Random order of patch indices
+   - `ids_restore`: Inverse mapping to restore original order
+
+3. **Select Visible Patches**:
+   - Takes first `len_keep` patches from shuffled order
+   - Uses `torch.gather` to extract those patches
+
+4. **Create Mask**:
+   - Binary mask: `1` for masked, `0` for visible
+   - Restored to original patch order using `ids_restore`
+
+**Why random masking?**: Forces model to learn robust representations, not just memorize patterns.
+
+**Returns**:
+- `visible_patches`: `(B, 392, embed_dim)` - patches to encode
+- `mask`: `(B, 1568)` - binary mask for loss computation
+- `ids_restore`: `(B, 1568)` - indices to restore original order
+- `ids_keep`: `(B, 392)` - indices of visible patches
+
+---
+
+#### `forward_encoder` Method
+
+```python
+def forward_encoder(self, x: torch.Tensor, mask_ratio: float):
+    # Get patches
+    patches = self.encoder.patch_embed(x)  # (B, 1568, embed_dim)
+    
+    # Apply masking
+    visible_patches, mask, ids_restore, ids_keep = self.random_masking(patches, mask_ratio)
+    # visible_patches: (B, 392, embed_dim)
+    
+    # Add class token
+    cls_tokens = self.encoder.cls_token.expand(B, -1, -1)
+    
+    # Get positional embeddings for visible patches
+    pos_embed = self.encoder.pos_embed.pos_embed  # (1, 1569, embed_dim)
+    cls_pos_embed = pos_embed[:, 0:1, :]  # Class token position
+    
+    # Get positional embeddings for visible patches
+    ids_keep_pos = ids_keep + 1  # Shift by 1 (index 0 is class token)
+    patch_pos_embed = torch.gather(
+        pos_embed[:, 1:, :],  # Skip class token
+        dim=1,
+        index=ids_keep_pos.unsqueeze(-1).expand(-1, -1, embed_dim)
+    )  # (B, 392, embed_dim)
+    
+    # Combine
+    pos_embed_visible = torch.cat([cls_pos_embed.expand(B, -1, -1), patch_pos_embed], dim=1)
+    visible_patches = torch.cat([cls_tokens, visible_patches], dim=1) + pos_embed_visible
+    
+    # Apply encoder
+    for block in self.encoder.blocks:
+        visible_patches = block(visible_patches)
+    visible_patches = self.encoder.norm(visible_patches)
+    
+    # Remove class token
+    encoded_patches = visible_patches[:, 1:, :]  # (B, 392, embed_dim)
+    
+    return encoded_patches, mask, ids_restore
+```
+
+**What it does**:
+
+1. **Extract Patches**: Converts video to patch embeddings
+
+2. **Apply Masking**: Randomly masks 75% of patches
+
+3. **Handle Positional Embeddings** (Key Fix):
+   - Full positional embedding: `(1, 1569, embed_dim)` for all patches + class token
+   - Visible sequence: `(B, 393, embed_dim)` for visible patches + class token
+   - **Solution**: Extract relevant positional embeddings:
+     - Class token positional embedding (index 0)
+     - Visible patch positional embeddings (using `ids_keep + 1`)
+   - **Why +1?**: Positional embedding index 0 is for class token, patch indices start at 1
+
+4. **Encode Visible Patches**: Passes through transformer blocks
+
+5. **Remove Class Token**: Returns only patch encodings for decoder
+
+**Why this approach?**: Positional embeddings must match the sequence length, so we extract only the ones we need.
+
+---
+
+#### `forward_decoder` Method
+
+```python
+def forward_decoder(self, x: torch.Tensor, ids_restore: torch.Tensor):
+    # x: (B, 392, embed_dim) - encoded visible patches
+    
+    # Project to decoder dimension
+    x = self.decoder_embed(x)  # (B, 392, decoder_embed_dim)
+    
+    # Restore full sequence
+    B, len_keep, D = x.shape
+    num_patches = self.encoder.patch_embed.num_patches  # 1568
+    
+    # Create full sequence with zeros for masked tokens
+    x_full = torch.zeros(B, num_patches, D, device=x.device, dtype=x.dtype)
+    x_full[:, :len_keep] = x  # Place visible patches at start
+    
+    # Restore original order
+    x_full = torch.gather(x_full, dim=1, index=ids_restore.unsqueeze(-1).expand(-1, -1, D))
+    # Now: visible patches in correct positions, masked tokens are zeros
+    
+    # Add class token
+    cls_token = torch.zeros(B, 1, D, device=x.device, dtype=x.dtype)
+    x_full = torch.cat([cls_token, x_full], dim=1)  # (B, 1569, D)
+    
+    # Add positional encoding
+    x_full = self.decoder_pos_embed(x_full)
+    
+    # Apply decoder blocks
+    for block in self.decoder_blocks:
+        x_full = block(x_full)
+    x_full = self.decoder_norm(x_full)
+    
+    # Remove class token
+    x_full = x_full[:, 1:, :]  # (B, 1568, D)
+    
+    # Predict pixels
+    pred = self.decoder_pred(x_full)  # (B, 1568, patch_pixels)
+    
+    return pred
+```
+
+**What it does** (step by step):
+
+1. **Project to Decoder Dimension**: Linear projection of encoded patches
+
+2. **Restore Full Sequence**:
+   - Creates tensor of zeros: `(B, 1568, D)`
+   - Places visible patches at start: `x_full[:, :392] = x`
+   - Uses `ids_restore` to restore original patch order
+   - **Result**: Visible patches in correct positions, masked tokens are zeros
+
+3. **Add Class Token and Positional Encoding**
+
+4. **Decode**: Passes through 4 transformer blocks
+
+5. **Predict Pixels**: Linear layer predicts pixel values for each patch
+   - Output: `(B, 1568, patch_pixels)`
+   - `patch_pixels = 2 × 16 × 16 × 3 = 1536` (temporal × spatial × channels)
+
+**Why zeros for masked tokens?**: Decoder learns to reconstruct from encoded visible patches + zero placeholders.
+
+---
+
+#### `patchify` Method
+
+```python
+def patchify(self, x: torch.Tensor) -> torch.Tensor:
+    # Input: (B, C, T, H, W) = (B, 3, 16, 224, 224)
+    B, C, T, H, W = x.shape
+    t_patch_size = 2
+    patch_size = 16
+    
+    # Reshape to patches
+    x = x.reshape(B, C, T // t_patch_size, t_patch_size, 
+                 H // patch_size, patch_size, 
+                 W // patch_size, patch_size)
+    # (B, 3, 8, 2, 14, 16, 14, 16)
+    
+    x = x.permute(0, 2, 4, 6, 1, 3, 5, 7)
+    # (B, 8, 14, 14, 3, 2, 16, 16)
+    
+    x = x.reshape(B, -1, C * t_patch_size * patch_size * patch_size)
+    # (B, 1568, 1536)
+    
+    return x
+```
+
+**What it does**: Converts video to patches (same structure as patch embedding, but without projection).
+
+**Why**: Creates target patches for loss computation - we need to compare predictions to original patch pixel values.
+
+---
+
+#### `compute_loss` Method
+
+```python
+def compute_loss(self, pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor):
+    # pred: (B, 1568, 1536) - predicted patch pixels
+    # target: (B, 1568, 1536) - target patch pixels
+    # mask: (B, 1568) - binary mask (1=masked, 0=visible)
+    
+    if self.norm_pix_loss:
+        # Normalize target patches
+        mean = target.mean(dim=-1, keepdim=True)  # Per-patch mean
+        var = target.var(dim=-1, keepdim=True)    # Per-patch variance
+        target = (target - mean) / (var + 1e-6) ** 0.5  # Normalize
+    
+    # Compute MSE loss
+    loss = (pred - target) ** 2  # (B, 1568, 1536)
+    loss = loss.mean(dim=-1)      # (B, 1568) - mean over pixels
+    
+    # Apply mask (only compute loss on masked patches)
+    loss = (loss * mask).sum() / mask.sum()  # Mean over masked patches only
+    
+    return loss
+```
+
+**What it does**:
+
+1. **Optional Normalization**: 
+   - If `norm_pix_loss=True`, normalizes each patch by its mean and variance
+   - **Why?**: Helps with training stability, reduces effect of brightness variations
+
+2. **Compute MSE**: Mean squared error between predicted and target pixels
+
+3. **Apply Mask**: 
+   - Only computes loss on masked patches (where `mask=1`)
+   - **Why?**: Model should learn to reconstruct masked patches, not visible ones
 
 **Loss Formula**:
 ```
 loss = mean((pred - target)²) for masked patches only
 ```
 
-##### `forward(x)`
-**Purpose**: Complete forward pass through VideoMAE.
+---
 
-**Process**:
-1. Encoder: Encode visible patches
-2. Decoder: Reconstruct all patches
-3. Compute loss on masked patches
-4. Return loss, predictions, and mask
-
-#### Backbone Configurations:
+#### `forward` Method
 
 ```python
-BACKBONE_CONFIGS = {
-    'vit_s': {
-        'embed_dim': 384,
-        'depth': 12,
-        'num_heads': 6,
-        'mlp_ratio': 4.0
-    },
-    'vit_b': {
-        'embed_dim': 768,
-        'depth': 12,
-        'num_heads': 12,
-        'mlp_ratio': 4.0
-    },
-    'vit_l': {
-        'embed_dim': 1024,
-        'depth': 24,
-        'num_heads': 16,
-        'mlp_ratio': 4.0
-    }
-}
+def forward(self, x: torch.Tensor):
+    # Input: (B, C, T, H, W)
+    
+    # Encoder: encode visible patches
+    encoded_patches, mask, ids_restore = self.forward_encoder(x, self.mask_ratio)
+    
+    # Decoder: reconstruct all patches
+    pred = self.forward_decoder(encoded_patches, ids_restore)
+    
+    # Compute loss
+    target = self.patchify(x)
+    loss = self.compute_loss(pred, target, mask)
+    
+    return loss, pred, mask
 ```
 
-#### Pretrained Weights:
+**What it does**: Complete forward pass through VideoMAE.
 
-The `load_pretrained()` method handles loading pretrained weights:
-- Supports different checkpoint formats (`state_dict`, `model`, or direct dict)
-- Removes `model.` prefix if present
-- Uses `strict=False` to allow partial loading
+**Returns**:
+- `loss`: Scalar reconstruction loss
+- `pred`: Predicted patch pixels `(B, 1568, 1536)`
+- `mask`: Binary mask `(B, 1568)`
 
 ---
 
@@ -284,73 +712,159 @@ The `load_pretrained()` method handles loading pretrained weights:
 
 ### File: `training/lightning_module.py`
 
-#### `VideoMAELightningModule` Class
+#### Class: `VideoMAELightningModule`
 
-**Purpose**: PyTorch Lightning wrapper for VideoMAE training.
+**Purpose**: PyTorch Lightning wrapper for VideoMAE training. Handles training/validation steps, optimizer configuration, and logging.
 
-**Inherits from**: `pl.LightningModule`
+#### `__init__` Method
 
-#### Key Components:
+```python
+def __init__(
+    self,
+    model: nn.Module,
+    learning_rate: float = 1e-4,
+    weight_decay: float = 0.05,
+    warmup_steps: int = 1000,
+    track_grad_norm: bool = False
+):
+    super().__init__()
+    self.save_hyperparameters(ignore=['model'])
+    
+    self.model = model
+    self.learning_rate = learning_rate
+    self.weight_decay = weight_decay
+    self.warmup_steps = warmup_steps
+    self.track_grad_norm = track_grad_norm
+```
 
-##### Initialization (`__init__`)
+**What it does**:
 - Wraps VideoMAE model
-- Stores hyperparameters (learning rate, weight decay, warmup steps)
-- Configures gradient norm tracking (optional, default: False)
-- Saves hyperparameters for logging/reproducibility
+- Stores hyperparameters
+- `save_hyperparameters()`: Saves hyperparameters to checkpoint for reproducibility
 
-##### `forward(x)`
-- Simple wrapper around model's forward pass
-- Returns `(loss, predictions, mask)`
+**Why PyTorch Lightning?**: Simplifies training loop, multi-GPU support, logging, checkpointing.
 
-##### `training_step(batch, batch_idx)`
-**Purpose**: Defines training step logic.
+---
 
-**Process**:
-1. Forward pass through model
-2. Extract loss
-3. Log training loss (on step and epoch)
-4. Optionally compute and log gradient norm
-5. Return loss for backpropagation
+#### `forward` Method
 
-**Logging**:
-- `train_loss`: Reconstruction loss
-- `grad_norm`: L2 norm of gradients (if enabled)
+```python
+def forward(self, x: torch.Tensor) -> tuple:
+    return self.model(x)
+```
 
-##### `validation_step(batch, batch_idx)`
-**Purpose**: Defines validation step logic.
+**What it does**: Simple wrapper around model's forward pass.
 
-**Process**:
-1. Forward pass through model (no gradients)
-2. Extract loss
-3. Log validation loss (on epoch only)
-4. Return loss for monitoring
+**Why**: PyTorch Lightning convention - `forward()` is used for inference.
 
-**Logging**:
-- `val_loss`: Validation reconstruction loss
+---
 
-##### `configure_optimizers()`
-**Purpose**: Configures optimizer.
+#### `training_step` Method
 
-**Returns**: `AdamWScheduleFree` optimizer
+```python
+def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+    # Forward pass
+    loss, pred, mask = self.model(batch)
+    
+    # Log training loss
+    self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+    
+    # Track gradient norm if enabled
+    if self.track_grad_norm:
+        grad_norm = self.compute_grad_norm()
+        self.log('grad_norm', grad_norm, on_step=True, on_epoch=False, logger=True)
+    
+    return loss
+```
+
+**What it does**:
+
+1. **Forward Pass**: Computes loss through model
+
+2. **Logging**:
+   - `on_step=True`: Logs every training step
+   - `on_epoch=True`: Also logs epoch average
+   - `prog_bar=True`: Shows in progress bar
+   - `logger=True`: Saves to TensorBoard
+
+3. **Gradient Norm Tracking** (optional):
+   - Computes L2 norm of all gradients
+   - Useful for monitoring gradient flow
+   - Helps detect vanishing/exploding gradients
+
+**Returns**: Loss tensor (PyTorch Lightning uses this for backpropagation).
+
+---
+
+#### `validation_step` Method
+
+```python
+def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+    # Forward pass (no gradients)
+    loss, pred, mask = self.model(batch)
+    
+    # Log validation loss
+    self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True)
+    
+    return loss
+```
+
+**What it does**: Similar to training step, but:
+- No gradient computation (automatic in validation)
+- Only logs on epoch (not every step)
+- Used for model selection and monitoring
+
+---
+
+#### `configure_optimizers` Method
+
+```python
+def configure_optimizers(self):
+    optimizer = AdamWScheduleFree(
+        self.parameters(),
+        lr=self.learning_rate,
+        weight_decay=self.weight_decay,
+        warmup_steps=self.warmup_steps
+    )
+    return optimizer
+```
+
+**What it does**: Configures AdamWScheduleFree optimizer.
 
 **AdamWScheduleFree Features**:
-- Schedule-free optimizer (no learning rate scheduling needed)
+- **Schedule-free**: No learning rate scheduling needed
 - Combines benefits of AdamW with schedule-free learning
-- Parameters:
-  - `lr`: Learning rate (default: 1e-4)
-  - `weight_decay`: Weight decay (default: 0.05)
-  - `warmup_steps`: Number of warmup steps (default: 1000)
+- **Warmup**: Gradually increases learning rate over `warmup_steps`
+- **Weight Decay**: L2 regularization for generalization
 
-##### `compute_grad_norm()`
-**Purpose**: Computes L2 norm of all gradients.
+**Why schedule-free?**: Simplifies training - no need to tune learning rate schedules.
 
-**Process**:
-1. Iterate through all model parameters
-2. Compute L2 norm of each parameter's gradient
-3. Sum squared norms
-4. Return square root (total gradient norm)
+---
 
-**Use Case**: Monitoring gradient flow and detecting vanishing/exploding gradients
+#### `compute_grad_norm` Method
+
+```python
+def compute_grad_norm(self) -> torch.Tensor:
+    total_norm = 0.0
+    
+    for p in self.model.parameters():
+        if p.grad is not None:
+            param_norm = p.grad.data.norm(2)  # L2 norm
+            total_norm += param_norm.item() ** 2
+    
+    total_norm = total_norm ** 0.5  # Square root
+    
+    return torch.tensor(total_norm, device=self.device)
+```
+
+**What it does**: Computes L2 norm of all gradients.
+
+**Formula**: `||g||₂ = sqrt(Σ ||g_i||₂²)`
+
+**Why useful?**:
+- **Vanishing gradients**: Very small norm → model not learning
+- **Exploding gradients**: Very large norm → training unstable
+- **Normal range**: Typically 0.1 - 10.0
 
 ---
 
@@ -358,316 +872,341 @@ The `load_pretrained()` method handles loading pretrained weights:
 
 ### File: `training/train.py`
 
-**Purpose**: Main entry point for training VideoMAE models.
+Main entry point for training. Handles argument parsing, configuration loading, and training setup.
 
-#### Key Functions:
+---
 
-##### `parse_args()`
-**Purpose**: Parses command-line arguments.
+#### `load_config` Function
 
-**Argument Categories**:
-- **Data**: CSV paths, batch size, workers, frame sampling
-- **Model**: Backbone, image size, patch size, mask ratio, pretrained weights
-- **Training**: Learning rate, weight decay, warmup, epochs, gradient tracking
-- **Checkpointing**: Directory, prefix, resume checkpoint
-- **Logging**: TensorBoard directory, experiment name
-- **Hardware**: Number of GPUs, precision (16/32 bit)
+```python
+def load_config(config_path):
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    return config
+```
 
-##### `create_data_loaders(args)`
-**Purpose**: Creates training and validation data loaders.
+**What it does**: Loads YAML configuration file.
 
-**Process**:
-1. Create `VideoDataset` instances for train/val
-2. Create `DataLoader` instances with:
-   - Batch size from args
-   - Shuffling (train only)
-   - Number of workers
-   - Pin memory (if CUDA available)
-   - Drop last batch (train only)
+**Why**: Enables hyperparameter management via config files.
 
-**Returns**: `(train_loader, val_loader)`
+---
 
-##### `create_model(args)`
-**Purpose**: Creates VideoMAE model instance.
+#### `parse_args` Function
+
+**Purpose**: Parses command-line arguments and merges with config file.
 
 **Process**:
-1. Initialize VideoMAE with specified backbone
-2. Load pretrained weights if provided
-3. Return model
 
-##### `create_lightning_module(args, model)`
-**Purpose**: Creates PyTorch Lightning module.
+1. **Define Arguments**: Creates argument parser with all hyperparameters
 
-**Process**:
-1. Wrap model in `VideoMAELightningModule`
-2. Configure hyperparameters
-3. Return lightning module
+2. **Parse Arguments**: Gets command-line arguments (may be None)
 
-##### `create_callbacks(args)`
-**Purpose**: Creates training callbacks.
+3. **Load Config File**:
+   - If `--config` specified, loads that file
+   - Otherwise, tries default `config/config.yaml`
+   - If not found, uses command-line args and defaults
 
-**Callbacks**:
+4. **Merge Config and Arguments**:
+   - **Priority**: Command-line args > Config file > Defaults
+   - For each parameter:
+     - If CLI arg is None, use config value
+     - If config value is None, use default
+     - CLI args always override config
+
+**Why this approach?**: 
+- Config files for stable experiments
+- CLI args for quick overrides
+- Best of both worlds
+
+---
+
+#### `create_data_loaders` Function
+
+```python
+def create_data_loaders(args):
+    # Create datasets
+    train_dataset = VideoDataset(...)
+    val_dataset = VideoDataset(...)
+    
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=True if torch.cuda.is_available() else False,
+        drop_last=True
+    )
+    
+    val_loader = DataLoader(...)
+    
+    return train_loader, val_loader
+```
+
+**What it does**:
+
+1. **Creates Datasets**: Training and validation VideoDataset instances
+
+2. **Creates DataLoaders**:
+   - **Batch Size**: Number of videos per batch
+   - **Shuffle**: Randomize order (train only)
+   - **Num Workers**: Parallel data loading processes
+   - **Pin Memory**: Faster GPU transfer (if CUDA available)
+   - **Drop Last**: Drop incomplete batches (train only)
+
+**Why these settings?**:
+- **Shuffle**: Data augmentation through random sampling
+- **Num Workers**: Parallel loading speeds up training
+- **Pin Memory**: Faster CPU→GPU transfer
+- **Drop Last**: Consistent batch sizes
+
+---
+
+#### `create_model` Function
+
+```python
+def create_model(args):
+    model = VideoMAE(
+        backbone=args.backbone,
+        img_size=args.img_size,
+        patch_size=args.patch_size,
+        mask_ratio=args.mask_ratio,
+        norm_pix_loss=args.norm_pix_loss,
+        pretrained=args.pretrained
+    )
+    return model
+```
+
+**What it does**: Creates VideoMAE model with specified configuration.
+
+**Why separate function?**: Clean separation, easier to test/modify.
+
+---
+
+#### `create_lightning_module` Function
+
+```python
+def create_lightning_module(args, model):
+    lightning_module = VideoMAELightningModule(
+        model=model,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        warmup_steps=args.warmup_steps,
+        track_grad_norm=args.track_grad_norm
+    )
+    return lightning_module
+```
+
+**What it does**: Wraps model in PyTorch Lightning module.
+
+---
+
+#### `create_callbacks` Function
+
+```python
+def create_callbacks(args):
+    callbacks = []
+    
+    # Model checkpoint callback
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=args.checkpoint_dir,
+        filename=f'{args.checkpoint_prefix}-{{epoch:02d}}-{{val_loss:.4f}}',
+        monitor='val_loss',
+        mode='min',
+        save_top_k=3,
+        save_last=True,
+        verbose=True
+    )
+    callbacks.append(checkpoint_callback)
+    
+    # Learning rate monitor
+    lr_monitor = LearningRateMonitor(logging_interval='step')
+    callbacks.append(lr_monitor)
+    
+    return callbacks
+```
+
+**What it does**:
+
 1. **ModelCheckpoint**:
-   - Saves top 3 models (by validation loss)
-   - Saves last checkpoint
-   - Filename format: `{prefix}-{epoch:02d}-{val_loss:.4f}.ckpt`
-   - Monitors `val_loss` (minimize)
+   - **Dirpath**: Directory to save checkpoints
+   - **Filename**: Pattern for checkpoint names
+   - **Monitor**: Metric to track (`val_loss`)
+   - **Mode**: `'min'` (minimize validation loss)
+   - **Save Top K**: Keeps best 3 models
+   - **Save Last**: Always saves last checkpoint
+   - **Why?**: Enables model selection and resuming training
 
 2. **LearningRateMonitor**:
-   - Logs learning rate (for monitoring, even with schedule-free optimizer)
-
-##### `main()`
-**Purpose**: Main training function.
-
-**Process**:
-1. Parse arguments
-2. Set random seed for reproducibility
-3. Create data loaders
-4. Create model and count parameters
-5. Create lightning module
-6. Create callbacks and logger
-7. Create PyTorch Lightning trainer
-8. Start training with `trainer.fit()`
-
-**Trainer Configuration**:
-- Maximum epochs
-- GPU configuration (single or multi-GPU)
-- Precision (16 or 32 bit)
-- Callbacks and logger
-- Gradient clipping (value: 1.0)
-- Validation frequency (twice per epoch)
-- Logging frequency (every 10 steps)
-
-**Multi-GPU Support**:
-- Uses `ddp` (Distributed Data Parallel) strategy for multi-GPU
-- Automatically handles data distribution across GPUs
+   - Logs learning rate to TensorBoard
+   - Useful even with schedule-free optimizer (for monitoring)
 
 ---
 
-## Configuration
+#### `main` Function
 
-### File: `config/config.yaml`
-
-**Purpose**: YAML configuration file for hyperparameter tuning.
-
-**Structure**:
-```yaml
-data:           # Data loading parameters
-model:          # Model architecture parameters
-training:       # Training hyperparameters
-checkpointing:  # Checkpoint configuration
-logging:        # Logging configuration
-hardware:       # Hardware configuration
+```python
+def main():
+    args = parse_args()
+    
+    # Set random seed
+    pl.seed_everything(42)
+    
+    # Create data loaders
+    train_loader, val_loader = create_data_loaders(args)
+    
+    # Create model
+    model = create_model(args)
+    
+    # Count parameters
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Total parameters: {total_params:,}")
+    
+    # Create lightning module
+    lightning_module = create_lightning_module(args, model)
+    
+    # Create callbacks and logger
+    callbacks = create_callbacks(args)
+    logger = TensorBoardLogger(save_dir=args.log_dir, name=args.experiment_name)
+    
+    # Create trainer
+    trainer = pl.Trainer(
+        max_epochs=args.max_epochs,
+        accelerator='gpu' if torch.cuda.is_available() else 'cpu',
+        devices=args.gpus,
+        strategy='ddp' if args.gpus > 1 else 'auto',
+        precision=args.precision,
+        callbacks=callbacks,
+        logger=logger,
+        log_every_n_steps=10,
+        val_check_interval=0.5,  # Validate twice per epoch
+        gradient_clip_val=1.0,
+        accumulate_grad_batches=1
+    )
+    
+    # Start training
+    trainer.fit(
+        lightning_module,
+        train_dataloaders=train_loader,
+        val_dataloaders=val_loader,
+        ckpt_path=args.resume_from_checkpoint
+    )
 ```
 
-**Note**: Currently, the training script uses command-line arguments. The config file can be used for future enhancements or external hyperparameter tuning tools.
+**What it does** (step by step):
+
+1. **Parse Arguments**: Gets configuration from CLI and/or config file
+
+2. **Set Random Seed**: Ensures reproducibility
+
+3. **Create Data Loaders**: Training and validation datasets
+
+4. **Create Model**: VideoMAE with specified backbone
+
+5. **Count Parameters**: Prints model size for reference
+
+6. **Create Lightning Module**: Wraps model for training
+
+7. **Create Callbacks and Logger**:
+   - Checkpoint callback for saving models
+   - TensorBoard logger for monitoring
+
+8. **Create Trainer**:
+   - **Accelerator**: GPU or CPU
+   - **Devices**: Number of GPUs
+   - **Strategy**: DDP for multi-GPU, auto for single
+   - **Precision**: 16 or 32 bit
+   - **Validation**: Twice per epoch (0.5 interval)
+   - **Gradient Clipping**: Prevents exploding gradients
+
+9. **Start Training**: Calls `trainer.fit()`
+
+**Trainer Configuration Explained**:
+- **`val_check_interval=0.5`**: Validates halfway through each epoch
+- **`gradient_clip_val=1.0`**: Clips gradients to max norm of 1.0
+- **`strategy='ddp'`**: Distributed Data Parallel for multi-GPU
+- **`precision=16`**: Mixed precision training (faster, less memory)
 
 ---
 
-## Data Flow
+## Data Flow and Training Process
 
-### Training Data Flow:
+### Complete Data Flow
 
 ```
-CSV File (video paths)
-    ↓
-VideoDataset.__getitem__()
-    ↓
-Load video with OpenCV
-    ↓
-Sample 32 consecutive frames
-    ↓
-Temporal downsampling (stride=2) → 16 frames
-    ↓
-Normalize to [0, 1]
-    ↓
-Tensor: (3, 16, 224, 224)
-    ↓
-DataLoader batches: (B, 3, 16, 224, 224)
-    ↓
-VideoMAE.forward()
-    ↓
-Patch Embedding → (B, 1568, embed_dim)
-    ↓
-Random Masking → Visible: (B, 392, embed_dim), Mask: (B, 1568)
-    ↓
-Encoder → Encoded: (B, 392, embed_dim)
-    ↓
-Decoder → Predictions: (B, 1568, patch_pixels)
-    ↓
-Loss Computation (masked patches only)
-    ↓
-Backpropagation
+1. CSV File (video paths)
+   ↓
+2. VideoDataset.__getitem__()
+   - Load video with OpenCV
+   - Sample 32 consecutive frames
+   - Temporal downsampling (stride=2) → 16 frames
+   - Normalize to [0, 1]
+   - Tensor: (3, 16, 224, 224)
+   ↓
+3. DataLoader batches: (B, 3, 16, 224, 224)
+   ↓
+4. VideoMAE.forward()
+   ↓
+5. Patch Embedding → (B, 1568, embed_dim)
+   ↓
+6. Random Masking → Visible: (B, 392, embed_dim), Mask: (B, 1568)
+   ↓
+7. Encoder → Encoded: (B, 392, embed_dim)
+   ↓
+8. Decoder → Predictions: (B, 1568, 1536)
+   ↓
+9. Loss Computation (masked patches only)
+   ↓
+10. Backpropagation
 ```
 
-### Forward Pass Details:
-
-1. **Input**: Video tensor `(B, 3, 16, 224, 224)`
-
-2. **Patch Embedding**:
-   - 3D convolution extracts patches
-   - Output: `(B, 1568, embed_dim)`
-
-3. **Masking**:
-   - Random shuffle and keep 25% (392 patches)
-   - Mask: `(B, 1568)` with 1s for masked, 0s for visible
-
-4. **Encoder**:
-   - Process only visible patches: `(B, 392, embed_dim)`
-   - Add class token and positional encoding
-   - Pass through transformer blocks
-   - Output: `(B, 392, embed_dim)`
-
-5. **Decoder**:
-   - Project to decoder dimension
-   - Restore full sequence with zeros for masked patches
-   - Add class token and positional encoding
-   - Pass through decoder transformer blocks
-   - Predict pixels: `(B, 1568, patch_pixels)`
-
-6. **Loss**:
-   - Compute target patches from original video
-   - MSE loss only on masked patches
-   - Return scalar loss value
-
----
-
-## Training Process
-
-### EVEREST Training Method:
-
-The EVEREST (Efficient Video Representation Learning) method is implemented through:
-
-1. **High Masking Ratio**: 75% of patches are masked (higher than image MAE)
-2. **Temporal Masking**: Patches are masked across both spatial and temporal dimensions
-3. **Reconstruction Target**: Model learns to reconstruct pixel values of masked patches
-4. **Asymmetric Architecture**: Heavy encoder (processes visible patches) + light decoder (reconstructs all patches)
-
-### Training Loop:
+### Training Loop
 
 ```
 For each epoch:
     For each training batch:
-        1. Load video batch
-        2. Forward pass (masking + encoding + decoding)
-        3. Compute loss (masked patches only)
-        4. Backward pass
-        5. Optimizer step (AdamWScheduleFree)
-        6. Log metrics
+        1. Load video batch (B, 3, 16, 224, 224)
+        2. Forward pass:
+           - Mask 75% of patches
+           - Encode visible patches
+           - Decode all patches
+           - Compute loss on masked patches
+        3. Backward pass (compute gradients)
+        4. Optimizer step (AdamWScheduleFree)
+        5. Log metrics (train_loss, grad_norm)
     
-    For each validation batch:
+    For each validation batch (twice per epoch):
         1. Load video batch
         2. Forward pass (no gradients)
         3. Compute loss
-        4. Log metrics
+        4. Log metrics (val_loss)
     
     Save checkpoint (if best or last)
 ```
 
-### Key Training Features:
+### Key Design Decisions
 
-1. **Schedule-Free Optimizer**: No learning rate scheduling needed
-2. **Gradient Clipping**: Prevents exploding gradients (value: 1.0)
-3. **Mixed Precision**: Optional 16-bit training for faster training
-4. **Multi-GPU**: Automatic data parallelization across GPUs
-5. **Checkpointing**: Saves best models and last checkpoint
-6. **TensorBoard Logging**: Real-time monitoring of training metrics
-
-### Monitoring Metrics:
-
-- **train_loss**: Training reconstruction loss (logged every step and epoch)
-- **val_loss**: Validation reconstruction loss (logged every epoch)
-- **grad_norm**: L2 norm of gradients (optional, logged every step if enabled)
-- **learning_rate**: Current learning rate (logged every step)
-
-### Checkpointing:
-
-- **Best Models**: Top 3 models by validation loss
-- **Last Checkpoint**: Always saved for resuming training
-- **Format**: `{prefix}-{epoch:02d}-{val_loss:.4f}.ckpt`
-- **Resume**: Use `--resume_from_checkpoint` to continue training
-
----
-
-## Key Design Decisions
-
-### 1. **3D Patch Embedding**
-- Uses 3D convolution to extract spatio-temporal patches
-- Maintains temporal relationships in patches
-
-### 2. **Asymmetric Encoder-Decoder**
-- Heavy encoder (12/24 layers) processes visible patches
-- Light decoder (4 layers) reconstructs all patches
-- Reduces computational cost while maintaining performance
-
-### 3. **High Masking Ratio (75%)**
-- Forces model to learn strong temporal and spatial representations
-- Higher than image MAE (typically 75% vs 75% for images, but more challenging for video)
-
-### 4. **Normalized Pixel Loss**
-- Optional normalization of target patches
-- Helps with training stability
-
-### 5. **PyTorch Lightning Framework**
-- Simplifies multi-GPU training
-- Handles distributed training automatically
-- Clean separation of model and training logic
-
-### 6. **AdamWScheduleFree Optimizer**
-- Schedule-free learning eliminates need for LR scheduling
-- Combines benefits of AdamW with schedule-free approach
-- Reduces hyperparameter tuning
-
----
-
-## Usage Examples
-
-### Basic Training:
-```bash
-python training/train.py \
-    --train_csv mp4_paths.csv \
-    --val_csv val500_2023-2024.csv \
-    --backbone vit_s \
-    --batch_size 8 \
-    --max_epochs 100
-```
-
-### With Pretrained Weights:
-```bash
-python training/train.py \
-    --backbone vit_b \
-    --pretrained path/to/weights.pth \
-    --batch_size 4
-```
-
-### Multi-GPU Training:
-```bash
-python training/train.py \
-    --gpus 4 \
-    --batch_size 8 \
-    --backbone vit_s
-```
-
-### With Gradient Tracking:
-```bash
-python training/train.py \
-    --track_grad_norm \
-    --backbone vit_s
-```
+1. **High Masking Ratio (75%)**: Forces model to learn strong representations
+2. **Asymmetric Architecture**: Heavy encoder, light decoder (computational efficiency)
+3. **3D Patch Embedding**: Captures spatio-temporal information together
+4. **Positional Embedding Extraction**: Handles variable sequence lengths correctly
+5. **Loss on Masked Patches Only**: Model learns reconstruction, not memorization
+6. **PyTorch Lightning**: Simplifies multi-GPU, logging, checkpointing
+7. **Schedule-Free Optimizer**: Reduces hyperparameter tuning
 
 ---
 
 ## Summary
 
-This codebase provides a complete implementation of VideoMAE with:
+This codebase implements a complete VideoMAE training pipeline with:
 
-1. **Flexible Data Loading**: Handles variable-length videos with proper sampling
-2. **Modular Architecture**: Separate components for easy modification
-3. **Multiple Backbones**: Support for ViT-S, ViT-B, and ViT-L
-4. **EVEREST Training**: Implements masked autoencoding for video
-5. **Production-Ready**: PyTorch Lightning for easy scaling and deployment
-6. **Well-Documented**: Comprehensive comments and documentation
-7. **Configurable**: Easy hyperparameter tuning via command-line arguments
+- **Flexible Data Loading**: Handles variable-length videos with proper sampling
+- **Modular Architecture**: Separate components for easy modification
+- **Multiple Backbones**: Support for ViT-S, ViT-B, and ViT-L
+- **EVEREST Training**: Implements masked autoencoding for video
+- **Production-Ready**: PyTorch Lightning for easy scaling
+- **Well-Documented**: Comprehensive comments throughout
+- **Configurable**: Easy hyperparameter tuning via YAML and CLI
 
-The implementation follows best practices for deep learning research code, with proper separation of concerns, comprehensive error handling, and extensive documentation.
+The implementation follows best practices for deep learning research code, with proper separation of concerns, error handling, and extensive documentation.
 
