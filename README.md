@@ -1,233 +1,71 @@
-# VideoMAE EVEREST Training
+# EVEREST: Efficient Masked Video Autoencoder by Removing Redundant Spatiotemporal Tokens [ICML2024]
 
-This repository implements VideoMAE (Video Masked Autoencoder) training with EVEREST (Efficient Masked Video Autoencoder by Removing Redundant Spatiotemporal Tokens) masking strategy. The implementation uses PyTorch Lightning for easy multi-GPU training and supports ViT-S, ViT-B, and ViT-L backbones.
+This repository is an official Pytorch implementation of [EVEREST: Efficient Masked Video Autoencoder by Removing Redundant Spatiotemporal Tokens](https://arxiv.org/abs/2211.10636).
 
-## Features
+**The new version of EVEREST will be updated soon!!!** 🚨
 
-- **EVEREST Masking**: Efficient token selection based on motion/feature importance
-- **Multiple Backbones**: Support for ViT-S (default), ViT-B, and ViT-L
-- **PyTorch Lightning**: Easy multi-GPU training with automatic distributed training
-- **AdamWScheduleFree Optimizer**: Schedule-free optimizer that adapts automatically
-- **Configurable Training**: YAML-based configuration for easy hyperparameter tuning
-- **Optional Features**:
-  - Pretrained weight loading
-  - Gradient norm tracking
-  - Random dataset subset sampling
-  - Configurable checkpoint directory and prefix
+<p align="center">
+  <img align="middle" width="1000" src="assets/EVEREST_concept.PNG">
+</p>
 
-## Installation
+## Abstract
 
-1. Clone the repository:
-```bash
-git clone <repository-url>
-cd TEEFM
+Masked Video Autoencoder (MVA) approaches have demonstrated their potential by significantly outperforming previous video representation learning methods. However, they waste an excessive amount of computations and memory in predicting uninformative tokens/frames due to random masking strategies. (e.g., over 16 nodes with 128 NVIDIA A100 GPUs). To resolve this issue, we exploit the unequal information density among the patches in videos and propose EVEREST, a surprisingly efficient MVA approach for video representation learning that finds tokens containing rich motion features and discards uninformative ones during both pre-training and fine-tuning. We further present an information-intensive frame selection strategy that allows the model to focus on informative and causal frames with minimal redundancy. Our method significantly reduces the computation and memory requirements of MVA, enabling the pre-training and fine-tuning on a single machine with 8 GPUs while achieving comparable performance to computation- and memory-heavy baselines on multiple benchmarks and the uncurated Ego4D dataset. We hope that our work contributes to reducing the barrier to further research on video understanding.
+
+## Results
+
+<p align="center">
+  <img align="middle" width="750" src="assets/EVEREST_plot.PNG">
+</p>
+
+## Prerequisites
+EVEREST is built in **Python 3.7.12**, **torch 1.8.0** and **torchvision 0.9.0**. Please use the following command to install the requirements:
+```
+$ pip install -r requirements.txt
 ```
 
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
+## Run
+1. __UCF101__ experiment
+```
+$ bash scripts/ucf101/pretrain.sh
+$ bash scripts/ucf101/finetune.sh
 ```
 
-## Dataset Format
-
-The dataset should be organized as CSV files with one video path per line:
-
-- **Training CSV** (`mp4_paths.csv`): Contains full paths to training videos
-- **Validation CSV** (`val500_2023-2024.csv`): Contains full paths to validation videos
-
-Example CSV format:
-```
-/path/to/video1.mp4
-/path/to/video2.mp4
-/path/to/video3.mp4
-```
-
-**Note**: Videos should already be preprocessed to 224x224x3 resolution. The dataloader will:
-- Randomly sample 32 consecutive frames from each video
-- Apply temporal downsampling with stride 2 → 16 frames
-- No resizing is performed (assumes videos are already 224x224)
-
-## Configuration
-
-All training parameters are configured via `configs/config.yaml`. Key settings include:
-
-### Model Configuration
-- `backbone`: Choose from 'ViT-S', 'ViT-B', or 'ViT-L'
-- `pretrained_weights`: Path to pretrained checkpoint (optional, set to `null` for random initialization)
-- `mask_ratio`: Fraction of tokens to mask (default: 0.75)
-
-### Data Configuration
-- `train_csv`: Path to training CSV file
-- `val_csv`: Path to validation CSV file
-- `use_subset`: Enable random subset sampling (default: false)
-- `subset_ratio`: Ratio of dataset to use if `use_subset` is true (default: 0.1)
-
-### Training Configuration
-- `batch_size`: Batch size per GPU
-- `learning_rate`: Learning rate for optimizer
-- `max_epochs`: Maximum number of training epochs
-- `gpus`: Number of GPUs to use (0 for CPU)
-- `track_gradient_norm`: Enable L2 norm tracking of gradients (default: false)
-
-### Checkpoint Configuration
-- `dir`: Directory to save checkpoints
-- `prefix`: Prefix for checkpoint filenames
-
-## Usage
-
-### Basic Training
-
-Train with default configuration:
-```bash
-python training/train.py --config configs/config.yaml
-```
-
-### Training with Custom Configuration
-
-Create a custom configuration file and specify it:
-```bash
-python training/train.py --config configs/my_config.yaml
-```
-
-### Multi-GPU Training
-
-PyTorch Lightning automatically handles multi-GPU training. Set the `gpus` parameter in the config file:
-```yaml
-training:
-  gpus: 4  # Use 4 GPUs
-```
-
-## Codebase Structure
+2. __HMDB51__ experiment
 
 ```
-TEEFM/
-├── configs/
-│   └── config.yaml              # Main configuration file
-├── data/
-│   ├── __init__.py
-│   └── video_dataset.py          # Video dataset loader
-├── models/
-│   ├── __init__.py
-│   ├── videomae.py               # VideoMAE model architecture
-│   └── everest_masking.py        # EVEREST masking generator
-├── training/
-│   ├── __init__.py
-│   ├── lightning_module.py       # PyTorch Lightning module
-│   └── train.py                  # Main training script
-├── utils/
-│   ├── __init__.py
-│   └── optimizer.py              # Optimizer factory
-├── requirements.txt
-└── README.md
+$ bash scripts/hmdb51/pretrain.sh
+$ bash scripts/hmdb51/finetune.sh
 ```
 
-## Key Components
+3. __K400, SSv2, OSCC__ experiment will be released soon.
 
-### VideoMAE Model (`models/videomae.py`)
-
-The VideoMAE model implements:
-- **Patch Embedding**: Converts video frames to tokens
-- **Temporal Embeddings**: Learnable embeddings for temporal dimension
-- **Vision Transformer Encoder**: Processes visible tokens only
-- **Decoder**: Reconstructs all tokens from encoded visible tokens
-- **EVEREST Masking**: Efficient token selection based on motion importance
-
-### EVEREST Masking (`models/everest_masking.py`)
-
-The EVEREST masking strategy:
-1. Computes motion importance for each spatiotemporal token
-2. Selects top-k most informative tokens to keep (unmasked)
-3. Masks the remaining tokens for reconstruction
-
-### Lightning Module (`training/lightning_module.py`)
-
-The PyTorch Lightning module handles:
-- Forward pass through VideoMAE
-- Loss computation (MSE with normalization)
-- Optional gradient norm tracking
-- Optimizer configuration (AdamWScheduleFree)
-- Training and validation steps
-
-### Training Script (`training/train.py`)
-
-The main training script:
-- Loads configuration from YAML
-- Creates datasets and data loaders
-- Initializes model and Lightning module
-- Sets up PyTorch Lightning Trainer with checkpointing
-- Starts training
-
-## Loss Function
-
-The model uses MSE loss with normalization:
-- Target patches are normalized by their mean and std
-- Loss is computed only on masked tokens (reconstruction task)
-- Normalization helps with training stability
-
-## Checkpointing
-
-Checkpoints are automatically saved to the directory specified in the config:
-- Best model based on validation loss
-- Last checkpoint
-- Top-k checkpoints (configurable)
-
-Checkpoint format: `{prefix}-{epoch:02d}-{val_loss:.4f}.ckpt`
-
-## Loading Pretrained Weights
-
-To initialize the model with pretrained weights, set the `pretrained_weights` path in the config:
-
-```yaml
-model:
-  pretrained_weights: './checkpoints/videomae_everest-epoch=50-val_loss=0.1234.ckpt'
+## Dataset
+1. Download [UCF101](https://www.crcv.ucf.edu/data/UCF101.php) and [HMDB51](https://serre-lab.clps.brown.edu/resource/hmdb-a-large-human-motion-database/) datasets from the official websites.
+2. Make annotation files in `*.csv` format like this:
+```
+path_to_video/video_0.avi 0
+path_to_video/video_1.avi 0
+...
+path_to_video/video_N.avi 101
 ```
 
-## Optional Features
+## Training Logs and Checkpoints
+### UCF101
 
-### Gradient Norm Tracking
+| Backbone | \#Frame |                          Pre-train (3,200 epochs)                           |                          Fine-tune (100 epochs)                           | Top-1 | Top-5 |
+| :------: | :-----: | :----------------------------------------------------------: | :----------------------------------------------------------: | :---: | :---: |
+|  ViT-B   |  16x5x3  | [log](https://drive.google.com/file/d/1dupg3ultdh1qsijUAYSZm8-hW2SAspLT/view?usp=share_link) / [checkpoint](https://drive.google.com/file/d/1liGNGprKdfiOCArK-WMqIcfeOJ-AZKzr/view?usp=share_link) | [log](https://drive.google.com/file/d/1EMlHBPqTC1_QURiCiaOdwPeoXdL67Gql/view?usp=share_link) / [checkpoint](https://drive.google.com/file/d/1iGFUxYpzjb7zaajB0O0j1MzS6PzyzrQF/view?usp=share_link) | 93.7  | 98.9  |
 
-Enable gradient norm tracking to monitor training stability:
-```yaml
-training:
-  track_gradient_norm: true
+## Contact
+Sunil Hwang: sunilhoho@kaist.ac.kr   
+Jaehong Yoon: jaehong.yoon@kaist.ac.kr
+
+## Acknowledgment
+The code is built upon [VidoeMAE](https://github.com/MCG-NJU/VideoMAE).
+
+## Citations
 ```
-
-This will log the L2 norm of the total loss gradient at each training step.
-
-### Dataset Subset Sampling
-
-Train on a random subset of the dataset for faster experimentation:
-```yaml
-data:
-  use_subset: true
-  subset_ratio: 0.1  # Use 10% of the dataset
-```
-
-## Troubleshooting
-
-### Out of Memory Errors
-
-- Reduce `batch_size` in the config
-- Reduce `num_workers` for data loading
-- Enable gradient accumulation: `accumulate_grad_batches: 2`
-
-### Slow Data Loading
-
-- Increase `num_workers` in the config
-- Ensure videos are stored on fast storage (SSD)
-- Consider using `decord` for faster video I/O (uncomment in requirements.txt)
-
-### CUDA Errors
-
-- Check GPU availability: `python -c "import torch; print(torch.cuda.is_available())"`
-- Reduce batch size if GPU memory is limited
-- Set `gpus: 0` in config to use CPU (slow, for testing only)
-
-## Citation
-
-If you use this code, please cite the EVEREST paper:
-
-```bibtex
 @inproceedings{hwang2024everest,
     title={EVEREST: Efficient Masked Video Autoencoder by Removing Redundant Spatiotemporal Tokens},
     author={Hwang, Sunil and Yoon, Jaehong and Lee, Youngwan and Hwang, Sung Ju},
@@ -235,12 +73,3 @@ If you use this code, please cite the EVEREST paper:
     year={2024},
 }
 ```
-
-## License
-
-[Add your license here]
-
-## Contact
-
-[Add contact information here]
-

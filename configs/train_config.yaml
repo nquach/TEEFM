@@ -1,0 +1,97 @@
+# EVEREST VideoMAE Training Configuration
+# Configuration file for training VideoMAE with custom dataset using PyTorch Lightning
+
+# Dataset configuration
+data:
+  # Path to CSV file containing training video paths (one path per line)
+  train_csv: "mp4_paths.csv"
+  # Path to CSV file containing validation video paths (one path per line)
+  val_csv: "val500_2023-2024.csv"
+  # Optional: Use a random subset of the training dataset (null to use full dataset)
+  # Value should be a float between 0 and 1, e.g., 0.1 for 10% of the dataset
+  subset_ratio: null
+  # Custom normalization values for the dataset
+  # These replace the default ImageNet normalization
+  normalize_mean: [0.117, 0.114, 0.113]
+  normalize_std: [0.208, 0.204, 0.203]
+
+# Model configuration
+model:
+  # Backbone architecture: "vit-s" (small), "vit-b" (base), or "vit-l" (large)
+  backbone: "vit-s"
+  # Path to pretrained checkpoint file (null for random initialization)
+  pretrained_path: null
+  # Decoder depth for the VideoMAE model
+  decoder_depth: 4
+  # Masking strategy: "random", "tube", or "motion-centric"
+  mask_type: "motion-centric"
+  # Masking ratio (fraction of patches to mask)
+  mask_ratio: 0.9
+  # Motion-centric masking ratio (only used if mask_type is "motion-centric")
+  motion_centric_masking_ratio: 0.7
+  # Drop path rate for regularization
+  drop_path: 0.0
+  # Whether to normalize target patches
+  normalize_target: true
+  # Input image size (videos should already be this size)
+  input_size: 224
+  # Patch size for the Vision Transformer
+  patch_size: 16
+
+# Training configuration
+training:
+  # Batch size per GPU
+  batch_size: 64
+  # Number of data loading workers
+  num_workers: 10
+  # Maximum number of training epochs
+  max_epochs: 800
+  # Whether to pin memory in DataLoader (faster GPU transfer)
+  pin_memory: true
+  # Random seed for reproducibility
+  seed: 0
+  # Number of frames to sample from each video (before downsampling)
+  num_frames: 16
+  # Temporal stride for downsampling (2 means every other frame)
+  temporal_stride: 2
+  # Number of consecutive frames to sample before downsampling
+  frames_to_sample: 32
+
+# Optimizer configuration (AdamWScheduleFree)
+optimizer:
+  # Learning rate
+  lr: 1.5e-4
+  # Weight decay
+  weight_decay: 0.05
+  # Beta parameters for Adam optimizer
+  betas: [0.9, 0.95]
+  # Epsilon for numerical stability
+  eps: 1e-8
+
+# Checkpoint configuration
+checkpoint:
+  # Directory to save checkpoints
+  dir: "output/checkpoints"
+  # Prefix for checkpoint filenames
+  prefix: "videomae"
+  # Number of best checkpoints to keep
+  save_top_k: 3
+  # Metric to monitor for saving best checkpoints
+  monitor: "val_loss"
+  # Save checkpoints every N epochs (in addition to best checkpoints)
+  save_ckpt_freq: 50
+
+# Optional features
+features:
+  # Whether to track and log L2 norm of total loss gradient (default: false)
+  track_grad_norm: false
+  # Whether to use gradient checkpointing to save memory
+  use_checkpoint: false
+
+# Logging configuration
+logging:
+  # Directory for TensorBoard logs
+  log_dir: "output/logs"
+  # Logging frequency (log every N steps)
+  log_freq: 10
+

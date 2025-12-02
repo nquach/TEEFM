@@ -1,23 +1,12 @@
-# Core PyTorch dependencies
-torch>=1.12.0
-torchvision>=0.13.0
-
-# PyTorch Lightning for training
-pytorch-lightning>=1.8.0
-
-# Schedule-free optimizer
-schedule-free>=1.0.0
-
-# Configuration management
-pyyaml>=6.0
-
-# Data processing
-numpy>=1.21.0
-pandas>=1.3.0
-
-# Progress bars
-tqdm>=4.64.0
-
-# Optional: For better video I/O performance
-# decord>=0.6.0  # Uncomment if you want to use decord instead of torchvision
-
+timm==0.4.12
+deepspeed==0.7.3
+tensorboardX
+decord
+einops
+opencv-python
+scipy
+pandas
+pytorch-lightning>=2.0.0
+pyyaml
+schedule-free
+torchvision
