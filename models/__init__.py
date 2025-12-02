@@ -1,6 +1,8 @@
-"""Model implementations for VideoMAE."""
+"""
+Model definitions for VideoMAE training.
+"""
 
 from .videomae import VideoMAE
 
-__all__ = ['VideoMAE']
+__all__ = ["VideoMAE"]
 

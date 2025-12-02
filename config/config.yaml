@@ -1,47 +1,56 @@
-# Configuration file for VideoMAE training
-# This file can be used for hyperparameter tuning
+# Configuration file for VideoMAE training with EVEREST method
+
+# Model configuration
+model:
+  backbone: "vit_s"  # Options: "vit_s", "vit_b", "vit_l"
+  pretrained: false  # Whether to initialize with pretrained weights
+  pretrained_path: null  # Path to pretrained checkpoint (if pretrained=true)
 
 # Data configuration
 data:
   train_csv: "mp4_paths.csv"
   val_csv: "val500_2023-2024.csv"
-  batch_size: 8
-  num_workers: 4
-  num_frames_to_sample: 32
-  temporal_stride: 2
-  train_dataset_ratio: null  # Ratio of training dataset to use (0.0-1.0). If null, uses all data
-  dataset_random_seed: null  # Random seed for dataset sampling (for reproducibility)
-
-# Model configuration
-model:
-  backbone: "vit_s"  # Options: vit_s, vit_b, vit_l
-  img_size: 224
-  patch_size: 16
-  mask_ratio: 0.75
-  norm_pix_loss: true
-  pretrained: null  # Path to pretrained weights, or null for random initialization
+  num_frames: 16  # Number of frames after temporal downsampling
+  sample_frames: 32  # Number of consecutive frames to sample before downsampling
+  temporal_stride: 2  # Temporal stride for downsampling
+  frame_size: 224  # Frame size (already 224x224, no resizing needed)
+  subset_ratio: null  # Ratio of training dataset to use (null = use all, 0.0-1.0)
 
 # Training configuration
 training:
-  learning_rate: 1.0e-4
-  weight_decay: 0.05
-  warmup_steps: 1000
+  batch_size: 8
+  num_workers: 4
   max_epochs: 100
-  track_grad_norm: false  # Set to true to track L2 norm of gradients
+  learning_rate: 1e-4
+  weight_decay: 0.05
+  
+# EVEREST training configuration
+everest:
+  mask_ratio: 0.75  # Ratio of patches to mask (default for VideoMAE)
+  tubelet_size: 2  # Temporal tubelet size
+  patch_size: 16  # Spatial patch size
 
-# Checkpointing configuration
-checkpointing:
-  checkpoint_dir: "./checkpoints"
-  checkpoint_prefix: "videomae"
-  resume_from_checkpoint: null  # Path to checkpoint to resume from
+# Optimizer configuration (AdamWScheduleFree)
+optimizer:
+  lr: 1e-4
+  weight_decay: 0.05
+
+# Checkpoint configuration
+checkpoint:
+  dir: "checkpoints"
+  prefix: "videomae"
+  save_top_k: 3
+  monitor: "val_loss"
+  mode: "min"
 
 # Logging configuration
 logging:
-  log_dir: "./logs"
-  experiment_name: "videomae_experiment"
+  track_gradient_norm: false  # Track L2 norm of total loss gradient
+  log_dir: "logs"
+  name: "videomae_everest"
 
 # Hardware configuration
 hardware:
-  gpus: 1
-  precision: 32  # Options: 16, 32
+  gpus: 1  # Number of GPUs (0 for CPU, -1 for all available)
+  precision: 16  # Mixed precision training (16 or 32)
 
