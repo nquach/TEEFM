@@ -1,6 +1,3 @@
-"""
-TEEFM: VideoMAE Training with EVEREST Masking
-"""
+"""VideoMAE training codebase with EVEREST masking."""
 
 __version__ = '0.1.0'
-

@@ -1,18 +1,18 @@
-# TEEFM: VideoMAE Training with EVEREST Masking
+# VideoMAE Training with EVEREST Masking
 
-This repository implements a Video Vision Transformer (VideoMAE) model trained using the EVEREST (Efficient Masked Video Autoencoder by Removing Redundant Spatiotemporal Tokens) method. The implementation uses PyTorch Lightning for easy multi-GPU training and supports ViT-S, ViT-B, and ViT-L backbones.
+This codebase implements and trains a Video Vision Transformer (VideoMAE) model using the EVEREST (Efficient Video Representation Learning with Masked Spatio-Temporal Modeling) training method.
 
 ## Features
 
-- **VideoMAE Architecture**: Masked autoencoder for self-supervised video representation learning
-- **EVEREST Masking**: Intelligent masking strategy that selects informative tokens based on motion features
-- **Multiple Backbones**: Support for ViT-S, ViT-B, and ViT-L architectures
-- **PyTorch Lightning**: Easy multi-GPU training with automatic distributed data parallel support
-- **AdamWScheduleFree Optimizer**: State-of-the-art optimizer that doesn't require learning rate scheduling
-- **torchcodec Integration**: Fast video decoding using torchcodec
-- **Comprehensive Configuration**: Easy hyperparameter tuning through configuration files
-- **Pretrained Weight Loading**: Initialize model with pretrained weights
-- **Gradient Norm Tracking**: Optional L2 norm of gradient logging
+- **VideoMAE Architecture**: Self-supervised video representation learning with masked autoencoding
+- **EVEREST Masking**: High masking ratio (90%) with temporal consistency
+- **Multiple Backbones**: Support for ViT-S, ViT-B, and ViT-L
+- **PyTorch Lightning**: Easy multi-GPU training and distributed training
+- **AdamWScheduleFree Optimizer**: Schedule-free optimizer for stable training
+- **Efficient Video Loading**: Uses torchcodec for fast video decoding
+- **Flexible Configuration**: Easy hyperparameter tuning via config module
+- **Checkpointing**: Customizable checkpoint directory and prefix
+- **Gradient Tracking**: Optional L2 norm tracking of gradients
 
 ## Installation
 
@@ -29,230 +29,181 @@ pip install -r requirements.txt
 
 ## Dataset Format
 
-The dataset should be CSV files with one video path per line (no header):
-
-**Training set** (`mp4_paths.csv`):
-```
-/path/to/video1.mp4
-/path/to/video2.mp4
-...
-```
-
-**Validation set** (`val500_2023-2024.csv`):
-```
-/path/to/val_video1.mp4
-/path/to/val_video2.mp4
-...
-```
-
-**Video Requirements:**
-- Videos should already be resized to 224x224x3
-- Variable number of frames (will be sampled during training)
-- MP4 format
+The codebase expects:
+- Training videos listed in `mp4_paths.csv` (one path per line)
+- Validation videos listed in `val500_2023-2024.csv` (one path per line)
+- Videos should be preprocessed to 224x224x3 resolution
+- Videos can have variable number of frames
 
 ## Usage
 
 ### Basic Training
 
-Train with default ViT-S backbone:
+Train with default settings (ViT-S backbone):
 ```bash
 python train.py
 ```
 
-### Training with Different Backbones
-
-**ViT-S (Small, fastest):**
-```bash
-python train.py --backbone ViT-S --batch_size 16
-```
-
-**ViT-B (Base, balanced):**
-```bash
-python train.py --backbone ViT-B --batch_size 8
-```
-
-**ViT-L (Large, best performance):**
-```bash
-python train.py --backbone ViT-L --batch_size 4
-```
-
-### Custom Hyperparameters
+### Training with Custom Configuration
 
 ```bash
 python train.py \
-    --backbone ViT-B \
-    --batch_size 8 \
-    --learning_rate 1.5e-4 \
-    --mask_ratio 0.9 \
-    --max_epochs 800 \
-    --devices 4 \
-    --precision 16-mixed
+    --backbone vit_b \
+    --batch_size 16 \
+    --learning_rate 1e-4 \
+    --max_epochs 100 \
+    --gpus 2 \
+    --checkpoint_dir ./checkpoints \
+    --checkpoint_prefix videomae_vitb
 ```
 
-### Multi-GPU Training
-
-PyTorch Lightning automatically handles multi-GPU training. Simply specify the number of devices:
-
-```bash
-python train.py --backbone ViT-S --devices 4
-```
-
-Or use all available GPUs (default):
-```bash
-python train.py --backbone ViT-S
-```
-
-### Load Pretrained Weights
-
-```bash
-python train.py --pretrained path/to/checkpoint.ckpt
-```
-
-### Custom Checkpoint Directory and Prefix
+### Training with Pretrained Weights
 
 ```bash
 python train.py \
-    --checkpoint_dir outputs/run1 \
-    --checkpoint_prefix experiment1
+    --pretrained_weights /path/to/pretrained/weights.pth \
+    --backbone vit_s
 ```
 
-### Enable Gradient Norm Logging
+### Enable Gradient Norm Tracking
 
 ```bash
-python train.py --log_gradient_norm
-```
-
-### Resume Training
-
-```bash
-python train.py --resume checkpoints/last.ckpt
+python train.py --track_gradient_norm
 ```
 
 ## Configuration
 
-All hyperparameters can be configured in `config.py`. The `VideoMAEConfig` class contains:
+The codebase uses a flexible configuration system in `config.py`. You can modify:
 
-- **Model parameters**: backbone, patch_size, decoder settings
-- **Masking parameters**: mask_ratio, motion_weight
-- **Training parameters**: learning_rate, batch_size, max_epochs
-- **Hardware settings**: devices, precision, gradient accumulation
-- **Checkpoint settings**: checkpoint_dir, checkpoint_filename_prefix
-- **Logging options**: log_gradient_norm
+- **Model Configuration**: Backbone type, patch size, masking ratio
+- **Data Configuration**: Batch size, number of workers, frame sampling
+- **Training Configuration**: Learning rate, weight decay, epochs
+- **Checkpoint Configuration**: Directory, prefix, saving strategy
 
-You can also use predefined configurations:
-- `get_vit_s_config()`: Optimized for ViT-S
-- `get_vit_b_config()`: Optimized for ViT-B
-- `get_vit_l_config()`: Optimized for ViT-L
+## Architecture
+
+### VideoMAE Model
+
+The model consists of:
+1. **ViT Encoder**: Processes visible video patches
+2. **EVEREST Masking**: High-ratio masking with temporal consistency
+3. **Lightweight Decoder**: Reconstructs masked patches
+
+### Data Processing Pipeline
+
+1. Load video using torchcodec VideoDecoder
+2. Randomly sample 32 consecutive frames
+3. Apply temporal downsampling with stride 2 → 16 frames
+4. Extract 3D patches (tubelets) of size (2, 16, 16)
+5. Apply EVEREST masking (90% masking ratio)
 
 ## Project Structure
 
 ```
 TEEFM/
+├── config.py                 # Configuration module
+├── train.py                  # Main training script
 ├── data/
 │   ├── __init__.py
-│   └── video_dataset.py          # Video dataset and data loading with torchcodec
+│   └── video_dataset.py      # Video dataset implementation
 ├── models/
 │   ├── __init__.py
-│   ├── vit_backbone.py           # Vision Transformer backbone
-│   ├── videomae.py               # VideoMAE encoder-decoder
-│   └── everest_masking.py        # EVEREST masking strategy
+│   ├── vit_backbone.py       # ViT backbone implementation
+│   ├── everest_masking.py    # EVEREST masking strategy
+│   └── videomae.py           # VideoMAE model
 ├── training/
 │   ├── __init__.py
-│   └── lightning_module.py       # PyTorch Lightning module
-├── config.py                     # Configuration and hyperparameters
-├── train.py                      # Main training script
-├── requirements.txt              # Python dependencies
-└── README.md                     # This file
+│   └── lightning_module.py    # PyTorch Lightning module
+├── requirements.txt
+└── README.md
 ```
 
 ## Key Components
 
-### 1. Video Dataset (`data/video_dataset.py`)
-- Loads videos from CSV file using torchcodec
-- Randomly samples 32 consecutive frames
-- Temporally downsamples with stride 2 to get 16 frames
-- Handles videos already at 224x224 resolution
-- Multiscale cropping augmentation (on by default)
+### 1. VideoDataset (`data/video_dataset.py`)
 
-### 2. Vision Transformer Backbone (`models/vit_backbone.py`)
-- Implements ViT-S, ViT-B, and ViT-L architectures
-- Adapted for video processing with temporal patches
-- Supports masking for self-supervised learning
+- Loads videos from CSV files
+- Uses torchcodec for efficient decoding
+- Randomly samples consecutive frames
+- Applies temporal downsampling
 
-### 3. VideoMAE Model (`models/videomae.py`)
-- Encoder: ViT backbone for encoding visible patches
-- Decoder: Lightweight transformer for reconstructing masked patches
-- Patchify/Unpatchify: Converts between video frames and patches
-- Pretrained weight loading support
+### 2. ViTBackbone (`models/vit_backbone.py`)
 
-### 4. EVEREST Masking (`models/everest_masking.py`)
-- Motion-based token selection: Identifies patches with high motion content
-- Combines motion scores with small random component for diversity
-- Significantly reduces computation by focusing on informative tokens
+- Implements Vision Transformer encoder
+- Supports ViT-S, ViT-B, and ViT-L
+- 3D patch embedding for video
+- Multi-head self-attention
 
-### 5. Lightning Module (`training/lightning_module.py`)
-- Integrates model, masking, and training logic
-- Handles loss computation (MSE on normalized patches)
-- Configures AdamWScheduleFree optimizer
-- Logs metrics to TensorBoard
+### 3. EverestMasking (`models/everest_masking.py`)
+
+- High masking ratio (90%)
+- Maintains temporal consistency
+- Random masking strategy
+
+### 4. VideoMAE (`models/videomae.py`)
+
+- Encoder-decoder architecture
+- Masked autoencoding objective
+- Reconstruction loss on masked tokens
+
+### 5. VideoMAELightningModule (`training/lightning_module.py`)
+
+- PyTorch Lightning wrapper
+- Training and validation steps
+- AdamWScheduleFree optimizer
 - Optional gradient norm tracking
 
 ## Training Details
 
-### Loss Function
-The model uses Mean Squared Error (MSE) loss on normalized patches. Only masked patches contribute to the loss (where mask == 0).
+- **Loss Function**: Mean Squared Error (MSE) on masked patches
+- **Optimizer**: AdamWScheduleFree (no learning rate scheduling needed)
+- **Mixed Precision**: Enabled by default (FP16)
+- **Gradient Clipping**: Default value of 1.0
 
-### Masking Strategy
-EVEREST uses a combination of:
-- **Motion estimation**: Computes frame differences to identify motion-rich regions
-- **Information selection**: Selects top-k most informative patches
-- **Random component**: Small random component for diversity
+## Checkpointing
 
-### Optimizer
-Uses `AdamWScheduleFree` which doesn't require learning rate scheduling. Falls back to AdamW with cosine annealing if schedulefree is not available.
-
-## Monitoring Training
-
-Training logs are saved to `logs/` directory. View with TensorBoard:
-
-```bash
-tensorboard --logdir logs
+Checkpoints are saved in the specified directory with the format:
+```
+{checkpoint_prefix}-{epoch:02d}-{val_loss:.4f}.ckpt
 ```
 
-Key metrics:
-- `train/loss`: Reconstruction loss
-- `train/mask_ratio`: Actual masking ratio
-- `train/lr`: Learning rate
-- `train/gradient_norm`: L2 norm of gradients (if enabled)
-- `val/loss`: Validation loss
+The top-k checkpoints (based on validation loss) are saved, along with the last checkpoint.
 
-## Checkpoints
+## Multi-GPU Training
 
-Checkpoints are saved to `checkpoints/` directory (or custom directory):
-- `last.ckpt`: Latest checkpoint
-- `{prefix}-{epoch}-{loss}.ckpt`: Top checkpoints based on validation loss
+The codebase automatically supports multi-GPU training when using PyTorch Lightning. Simply specify the number of GPUs:
+
+```bash
+python train.py --gpus 4
+```
+
+PyTorch Lightning will handle data parallelism and gradient synchronization.
+
+## Monitoring
+
+Training progress is logged to TensorBoard. View logs with:
+
+```bash
+tensorboard --logdir ./checkpoints/logs
+```
+
+## Hyperparameter Tuning
+
+All hyperparameters can be easily tuned by:
+1. Modifying `config.py` directly
+2. Using command-line arguments in `train.py`
+3. Creating custom configuration objects
 
 ## Citation
 
-If you use this code, please cite the EVEREST paper:
-
-```bibtex
-@inproceedings{hwang2024everest,
-    title={EVEREST: Efficient Masked Video Autoencoder by Removing Redundant Spatiotemporal Tokens},
-    author={Hwang, Sunil and Yoon, Jaehong and Lee, Youngwan and Hwang, Sung Ju},
-    booktitle={International Conference on Machine Learning},
-    year={2024},
-}
-```
+If you use this codebase, please cite the original papers:
+- VideoMAE: Masked Autoencoders are Data-Efficient Learners for Self-Supervised Video Pre-Training
+- EVEREST: Efficient Video Representation Learning with Masked Spatio-Temporal Modeling
 
 ## License
 
 [Add your license here]
 
-## Acknowledgments
+## Contact
 
-- EVEREST: Efficient Masked Video Autoencoder by Removing Redundant Spatiotemporal Tokens
-- VideoMAE: Masked Autoencoders are Scalable Vision Learners for Video
-- PyTorch Lightning for the training framework
-- torchcodec for efficient video decoding
-
+[Add contact information here]

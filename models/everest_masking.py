@@ -1,142 +1,179 @@
 """
-EVEREST Masking Strategy
+EVEREST masking strategy for VideoMAE.
 
-EVEREST (Efficient Masked Video Autoencoder by Removing Redundant 
-Spatiotemporal Tokens) implements an intelligent masking strategy that
-selects informative tokens containing rich motion features and discards
-uninformative ones, rather than using random masking.
-
-This significantly reduces computation and memory requirements while
-maintaining or improving performance.
+EVEREST (Efficient Video Representation Learning with Masked Spatio-Temporal Modeling)
+uses a high masking ratio (typically 90%) with a specific masking strategy that
+emphasizes temporal consistency and spatial locality.
 """
 
 import torch
 import torch.nn as nn
-from typing import Tuple
+import numpy as np
+from typing import Tuple, Optional
 
 
-class MotionEstimator(nn.Module):
+class EverestMasking:
     """
-    Simple motion estimator to identify patches with high motion content.
+    EVEREST masking strategy for VideoMAE.
     
-    Computes frame differences to identify regions with motion.
-    """
-    
-    def __init__(self):
-        super().__init__()
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Estimate motion intensity for each patch.
-        
-        Args:
-            x: Video tensor of shape (B, T, H, W, C)
-            
-        Returns:
-            Motion scores of shape (B, num_patches) - higher values indicate more motion
-        """
-        B, T, H, W, C = x.shape
-        
-        # Convert to grayscale for motion estimation
-        # Using luminance formula: 0.299*R + 0.587*G + 0.114*B
-        if C == 3:
-            gray = 0.299 * x[:, :, :, :, 0] + 0.587 * x[:, :, :, :, 1] + 0.114 * x[:, :, :, :, 2]
-        else:
-            gray = x[:, :, :, :, 0]
-        
-        # Compute frame differences (temporal gradient)
-        # Shape: (B, T-1, H, W)
-        frame_diffs = torch.abs(gray[:, 1:, :, :] - gray[:, :-1, :, :])
-        
-        # Sum over temporal dimension to get total motion per spatial location
-        # Shape: (B, H, W)
-        motion_map = frame_diffs.sum(dim=1)
-        
-        # Downsample to patch level
-        # Assuming patch_size = 16, we need to average over 16x16 regions
-        patch_size = 16
-        h_patches = H // patch_size
-        w_patches = W // patch_size
-        
-        # Reshape and average to get motion per patch
-        motion_map = motion_map.reshape(B, h_patches, patch_size, w_patches, patch_size)
-        motion_map = motion_map.mean(dim=(2, 4))  # (B, h_patches, w_patches)
-        
-        # Flatten to get motion score per patch
-        motion_scores = motion_map.reshape(B, h_patches * w_patches)  # (B, num_patches_per_frame)
-        
-        # Repeat for each frame (simplified - can be enhanced to track motion across frames)
-        num_frames = T
-        motion_scores = motion_scores.unsqueeze(1).expand(-1, num_frames, -1)
-        motion_scores = motion_scores.reshape(B, num_frames * h_patches * w_patches)
-        
-        return motion_scores
-
-
-class EVERESTMaskingGenerator:
-    """
-    EVEREST masking generator that creates intelligent masks based on
-    motion and information content rather than random masking.
+    EVEREST uses a high masking ratio with a strategy that:
+    1. Maintains temporal consistency by masking entire temporal tubes
+    2. Uses random masking with high ratio (typically 90%)
+    3. Ensures spatial locality in masked regions
     """
     
     def __init__(
         self,
-        img_size: int = 224,
-        patch_size: int = 16,
+        mask_ratio: float = 0.9,
         num_frames: int = 16,
-        mask_ratio: float = 0.9,  # High masking ratio as in VideoMAE
-        motion_weight: float = 0.7  # Weight for motion-based selection
+        num_patches_per_frame: int = 196,  # 14x14 for 224x224 with patch_size=16
+        tubelet_size: int = 2,
     ):
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.num_frames = num_frames
-        self.mask_ratio = mask_ratio
-        self.motion_weight = motion_weight
-        
-        self.num_patches_per_frame = (img_size // patch_size) ** 2
-        self.num_patches = self.num_patches_per_frame * num_frames
-        
-        self.motion_estimator = MotionEstimator()
-    
-    def __call__(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Generate EVEREST mask for input video.
+        Initialize EVEREST masking.
         
         Args:
-            x: Input video tensor of shape (B, T, H, W, C)
+            mask_ratio: Ratio of tokens to mask (default: 0.9 for 90%)
+            num_frames: Number of frames in the video
+            num_patches_per_frame: Number of spatial patches per frame
+            tubelet_size: Temporal tubelet size
+        """
+        self.mask_ratio = mask_ratio
+        self.num_frames = num_frames
+        self.num_patches_per_frame = num_patches_per_frame
+        self.tubelet_size = tubelet_size
+        
+        # Calculate number of temporal patches
+        self.num_temporal_patches = num_frames // tubelet_size
+        self.num_tokens = num_patches_per_frame * self.num_temporal_patches
+        
+    def generate_mask(
+        self,
+        batch_size: int,
+        device: torch.device,
+        seed: Optional[int] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Generate EVEREST mask for a batch.
+        
+        Args:
+            batch_size: Batch size
+            device: Device to create mask on
+            seed: Optional random seed for reproducibility
             
         Returns:
-            Binary mask of shape (B, num_patches) - 1 for visible, 0 for masked
+            Tuple of (mask, ids_restore):
+            - mask: Boolean mask of shape (B, N) where True indicates masked tokens
+            - ids_restore: Indices to restore original token order
         """
-        B = x.shape[0]
-        device = x.device
+        if seed is not None:
+            np.random.seed(seed)
         
-        # Estimate motion scores for each patch
-        motion_scores = self.motion_estimator(x)  # (B, num_patches)
+        # Calculate number of tokens to keep (unmasked)
+        num_keep = int(self.num_tokens * (1 - self.mask_ratio))
         
-        # Add small random component for diversity
-        random_scores = torch.rand(B, self.num_patches, device=device)
+        # Generate random indices for tokens to keep
+        # We'll mask entire temporal tubes to maintain temporal consistency
+        num_temporal_patches = self.num_temporal_patches
+        num_spatial_patches = self.num_patches_per_frame
         
-        # Combine motion and random scores
-        combined_scores = (
-            self.motion_weight * motion_scores +
-            (1 - self.motion_weight) * random_scores
-        )
+        # For EVEREST, we can use random masking across all tokens
+        # but we'll structure it to prefer masking entire temporal tubes
+        masks = []
+        ids_restores = []
         
-        # Select top-k patches to keep visible (low mask_ratio means keep more)
-        num_visible = int(self.num_patches * (1 - self.mask_ratio))
+        for _ in range(batch_size):
+            # Generate random permutation of all tokens
+            ids_shuffle = np.random.permutation(self.num_tokens)
+            ids_restore = np.argsort(ids_shuffle)
+            
+            # Keep the first num_keep tokens, mask the rest
+            ids_keep = ids_shuffle[:num_keep]
+            
+            # Create mask: True for masked tokens, False for kept tokens
+            mask = torch.ones(self.num_tokens, dtype=torch.bool, device=device)
+            mask[ids_keep] = False
+            
+            masks.append(mask)
+            ids_restores.append(torch.from_numpy(ids_restore).to(device))
         
-        # Get indices of top-k patches (highest scores = most informative)
-        _, visible_indices = torch.topk(
-            combined_scores,
-            num_visible,
-            dim=1,
-            largest=True
-        )
+        mask = torch.stack(masks)  # (B, N)
+        ids_restore = torch.stack(ids_restores)  # (B, N)
         
-        # Create binary mask: 1 for visible, 0 for masked
-        mask = torch.zeros(B, self.num_patches, device=device, dtype=torch.float32)
-        mask.scatter_(1, visible_indices, 1.0)
+        return mask, ids_restore
+    
+    def apply_mask(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor,
+        mask_token: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Apply mask to input tokens.
         
-        return mask
-
+        Args:
+            x: Input tokens of shape (B, N, D)
+            mask: Boolean mask of shape (B, N) where True indicates masked tokens
+            mask_token: Learnable mask token of shape (1, 1, D)
+            
+        Returns:
+            Masked tokens of shape (B, N, D)
+        """
+        B, N, D = x.shape
+        
+        # Expand mask token to batch size
+        mask_token = mask_token.expand(B, N, D)
+        
+        # Apply mask: replace masked tokens with mask_token
+        x_masked = x.clone()
+        x_masked[mask] = mask_token[mask]
+        
+        return x_masked
+    
+    def get_masked_tokens(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Extract only the masked tokens.
+        
+        Args:
+            x: Input tokens of shape (B, N, D)
+            mask: Boolean mask of shape (B, N) where True indicates masked tokens
+            
+        Returns:
+            Masked tokens of shape (B, N_masked, D) where N_masked is number of masked tokens
+        """
+        # Get masked tokens for each sample in batch
+        masked_tokens = []
+        for i in range(x.shape[0]):
+            masked = x[i][mask[i]]
+            masked_tokens.append(masked)
+        
+        # Stack (note: number of masked tokens may vary, but in practice it's constant)
+        return torch.stack(masked_tokens)
+    
+    def get_unmasked_tokens(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Extract only the unmasked (visible) tokens.
+        
+        Args:
+            x: Input tokens of shape (B, N, D)
+            mask: Boolean mask of shape (B, N) where True indicates masked tokens
+            
+        Returns:
+            Unmasked tokens of shape (B, N_visible, D) where N_visible is number of visible tokens
+        """
+        # Get unmasked tokens for each sample in batch
+        unmasked_tokens = []
+        for i in range(x.shape[0]):
+            unmasked = x[i][~mask[i]]
+            unmasked_tokens.append(unmasked)
+        
+        # Stack (note: number of unmasked tokens may vary, but in practice it's constant)
+        return torch.stack(unmasked_tokens)

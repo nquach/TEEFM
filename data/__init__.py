@@ -1,8 +1,5 @@
-"""
-Data package for video dataset loading.
-"""
+"""Data loading modules for video dataset."""
 
-from .video_dataset import VideoDataset, get_video_transforms, MultiscaleCrop
+from .video_dataset import VideoDataset
 
-__all__ = ['VideoDataset', 'get_video_transforms', 'MultiscaleCrop']
-
+__all__ = ['VideoDataset']

@@ -1,139 +1,126 @@
 """
-Configuration file for VideoMAE training with EVEREST masking.
+Configuration module for VideoMAE training with EVEREST masking.
 
-This module provides a configuration class and default parameters for easy
-hyperparameter tuning. Modify the default values or create new configurations
-as needed.
+This module contains all hyperparameters and training settings that can be easily
+tuned for different experiments.
 """
 
-import os
 from dataclasses import dataclass
 from typing import Optional
 
 
 @dataclass
-class VideoMAEConfig:
-    """
-    Configuration class for VideoMAE training.
+class ModelConfig:
+    """Configuration for the VideoMAE model architecture."""
+    # Backbone options: 'vit_s', 'vit_b', 'vit_l'
+    backbone: str = 'vit_s'
     
-    This class contains all hyperparameters needed for training.
-    Modify values here or override in the training script.
-    """
+    # Image and patch configuration
+    img_size: int = 224  # Input image size (height and width)
+    patch_size: int = 16  # Patch size for ViT
+    num_frames: int = 16  # Number of frames after temporal downsampling
     
-    # Data parameters
-    csv_file: str = 'mp4_paths.csv'
-    val_csv_file: str = 'val500_2023-2024.csv'  # Validation set CSV file
-    num_frames: int = 32  # Frames to sample before downsampling
-    temporal_stride: int = 2  # Stride for temporal downsampling
-    final_num_frames: int = 16  # Final number of frames after downsampling
-    img_size: int = 224
+    # VideoMAE specific parameters
+    tubelet_size: int = 2  # Temporal tubelet size
+    mask_ratio: float = 0.9  # Masking ratio for EVEREST (90% is typical)
+    
+    # Pretrained weights path (None for random initialization)
+    pretrained_weights: Optional[str] = None
+
+
+@dataclass
+class DataConfig:
+    """Configuration for data loading and preprocessing."""
+    # Dataset paths
+    train_csv: str = 'mp4_paths.csv'
+    val_csv: str = 'val500_2023-2024.csv'
+    
+    # Frame sampling parameters
+    sample_frames: int = 32  # Number of consecutive frames to sample
+    temporal_stride: int = 2  # Temporal downsampling stride
+    
+    # DataLoader parameters
     batch_size: int = 8
-    num_workers: int = os.cpu_count() or 4  # Use all available CPUs
+    num_workers: int = 4
     pin_memory: bool = True
-    persistent_workers: bool = True  # Keep workers alive between epochs
-    prefetch_factor: int = 2  # Number of batches to prefetch per worker
-    
-    # Model parameters
-    backbone: str = 'ViT-S'  # Options: 'ViT-S', 'ViT-B', 'ViT-L'
-    patch_size: int = 16
-    decoder_embed_dim: int = 512
-    decoder_depth: int = 8
-    decoder_num_heads: int = 16
-    dropout: float = 0.0
-    drop_path: float = 0.0
-    
-    # Masking parameters (EVEREST)
-    mask_ratio: float = 0.9  # Ratio of patches to mask (high ratio as in VideoMAE)
-    motion_weight: float = 0.7  # Weight for motion-based token selection
+    prefetch_factor: int = 2
+
+
+@dataclass
+class TrainingConfig:
+    """Configuration for training hyperparameters."""
+    # Optimizer parameters (AdamWScheduleFree)
+    learning_rate: float = 1e-4
+    weight_decay: float = 0.05
     
     # Training parameters
-    learning_rate: float = 1.5e-4  # Base learning rate
-    weight_decay: float = 0.05
-    beta1: float = 0.9  # Adam beta1
-    beta2: float = 0.95  # Adam beta2
-    warmup_epochs: int = 40
-    max_epochs: int = 800
-    norm_pix_loss: bool = True  # Normalize patches before loss computation
+    max_epochs: int = 100
+    gradient_clip_val: Optional[float] = 1.0  # Gradient clipping value
     
-    # Training setup
-    accelerator: str = 'gpu'  # 'gpu', 'cpu', or 'auto'
-    devices: Optional[int] = None  # None = use all available GPUs (auto)
-    precision: str = '16-mixed'  # Mixed precision training: '16-mixed', '32', 'bf16-mixed'
-    gradient_clip_val: Optional[float] = None  # Gradient clipping value
-    accumulate_grad_batches: int = 1  # Gradient accumulation
+    # Loss function
+    loss_type: str = 'mse'  # 'mse' for mean squared error
     
-    # Logging and checkpointing
+    # Gradient norm tracking (off by default)
+    track_gradient_norm: bool = False
+    
+    # Mixed precision training
+    use_amp: bool = True  # Automatic Mixed Precision
+
+
+@dataclass
+class CheckpointConfig:
+    """Configuration for checkpointing."""
+    # Checkpoint directory
+    checkpoint_dir: str = './checkpoints'
+    
+    # Checkpoint file prefix
+    checkpoint_prefix: str = 'videomae'
+    
+    # Checkpoint saving strategy
+    save_top_k: int = 3  # Save top k checkpoints based on validation loss
+    monitor: str = 'val_loss'  # Metric to monitor
+    mode: str = 'min'  # 'min' for loss, 'max' for accuracy
+    
+    # Save frequency
+    save_every_n_epochs: int = 1
+    save_last: bool = True  # Always save the last checkpoint
+
+
+@dataclass
+class TrainerConfig:
+    """Configuration for PyTorch Lightning Trainer."""
+    # GPU configuration
+    gpus: int = 1  # Number of GPUs (0 for CPU)
+    accelerator: str = 'gpu'  # 'gpu' or 'cpu'
+    
+    # Logging
     log_every_n_steps: int = 50
-    # Validation frequency controls (work together):
-    # - check_val_every_n_epoch: Controls which epochs to validate (epoch-level frequency)
-    #   Example: 10 means validate at the end of every 10th epoch
-    # - val_check_interval: Controls how often to validate WITHIN an epoch
-    #   - None: Only validate at epoch boundaries (respects check_val_every_n_epoch)
-    #   - Float (0.0-1.0): Fraction of epoch (e.g., 0.5 = twice per epoch)
-    #   - Integer: Number of batches (e.g., 100 = every 100 batches)
-    # Example: check_val_every_n_epoch=10, val_check_interval=None -> validate every 10 epochs
-    # Example: check_val_every_n_epoch=1, val_check_interval=0.5 -> validate twice per epoch
-    val_check_interval: Optional[float] = None  # None = only at epoch boundaries
-    check_val_every_n_epoch: int = 10  # Validate at the end of every N epochs
-    enable_checkpointing: bool = True
-    checkpoint_dir: str = 'checkpoints'  # Directory to save checkpoints
-    checkpoint_filename_prefix: str = 'videomae'  # Prefix for checkpoint filenames
-    # Final filename format: {prefix}-{epoch:02d}-{monitor_metric:.2f}.ckpt
-    monitor_metric: str = 'train/loss'
-    mode: str = 'min'  # 'min' or 'max' for checkpoint saving
+    val_check_interval: float = 1.0  # Validate every N epochs (1.0 = every epoch)
     
-    # Resume training
-    resume_from_checkpoint: Optional[str] = None
-    
-    # Pretrained weights (for initializing model, not resuming training)
-    pretrained_checkpoint: Optional[str] = None  # Path to pretrained model weights (.ckpt, .pth, or .pt)
-    load_pretrained_strict: bool = True  # If False, allows partial weight loading when architectures don't match exactly
-    
-    # Logging options
-    log_gradient_norm: bool = False  # Log L2 norm of full loss gradient (off by default)
-    
-    # Other
-    seed: int = 42
-    deterministic: bool = False  # Set to True for reproducibility (slower)
+    # Other settings
+    deterministic: bool = False
+    benchmark: bool = True  # cudnn benchmark for faster training
+    precision: int = 16 if TrainingConfig().use_amp else 32  # 16 for mixed precision
+
+
+@dataclass
+class Config:
+    """Main configuration class that aggregates all sub-configurations."""
+    model: ModelConfig = None
+    data: DataConfig = None
+    training: TrainingConfig = None
+    checkpoint: CheckpointConfig = None
+    trainer: TrainerConfig = None
     
     def __post_init__(self):
-        """Validate configuration after initialization."""
-        assert self.backbone in ['ViT-S', 'ViT-B', 'ViT-L'], \
-            f"Invalid backbone: {self.backbone}"
-        assert 0 < self.mask_ratio < 1, \
-            f"mask_ratio must be between 0 and 1, got {self.mask_ratio}"
-        assert 0 <= self.motion_weight <= 1, \
-            f"motion_weight must be between 0 and 1, got {self.motion_weight}"
-        assert self.final_num_frames == self.num_frames // self.temporal_stride, \
-            f"final_num_frames ({self.final_num_frames}) should equal " \
-            f"num_frames // temporal_stride ({self.num_frames // self.temporal_stride})"
-
-
-# Predefined configurations for different scenarios
-def get_vit_s_config() -> VideoMAEConfig:
-    """Get configuration for ViT-S backbone (default, fastest)."""
-    return VideoMAEConfig(
-        backbone='ViT-S',
-        batch_size=16,  # Can use larger batch with smaller model
-        learning_rate=1.5e-4
-    )
-
-
-def get_vit_b_config() -> VideoMAEConfig:
-    """Get configuration for ViT-B backbone (balanced)."""
-    return VideoMAEConfig(
-        backbone='ViT-B',
-        batch_size=8,
-        learning_rate=1.5e-4
-    )
-
-
-def get_vit_l_config() -> VideoMAEConfig:
-    """Get configuration for ViT-L backbone (largest, best performance)."""
-    return VideoMAEConfig(
-        backbone='ViT-L',
-        batch_size=4,  # Smaller batch due to memory constraints
-        learning_rate=1.0e-4,  # Slightly lower LR for larger model
-        accumulate_grad_batches=2  # Compensate for smaller batch
-    )
-
+        """Initialize sub-configurations if not provided."""
+        if self.model is None:
+            self.model = ModelConfig()
+        if self.data is None:
+            self.data = DataConfig()
+        if self.training is None:
+            self.training = TrainingConfig()
+        if self.checkpoint is None:
+            self.checkpoint = CheckpointConfig()
+        if self.trainer is None:
+            self.trainer = TrainerConfig()

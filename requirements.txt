@@ -2,19 +2,19 @@
 torch>=2.0.0
 torchvision>=0.15.0
 pytorch-lightning>=2.0.0
-numpy>=1.21.0
-pandas>=1.3.0
 
-# Video decoding
+# Video processing
 torchcodec>=0.1.0
 
 # Optimizer
 schedulefree>=1.0.0
 
+# Data processing
+pandas>=1.5.0
+numpy>=1.23.0
+
 # Logging and visualization
-tensorboard>=2.10.0
+tensorboard>=2.12.0
 
-# Optional but recommended
-tqdm>=4.64.0
-pillow>=9.0.0
-
+# Optional: for experiment tracking
+# wandb>=0.15.0

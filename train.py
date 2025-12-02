@@ -1,40 +1,31 @@
 """
 Main training script for VideoMAE with EVEREST masking.
 
-This script sets up and runs training using PyTorch Lightning.
-Supports single-GPU and multi-GPU training automatically.
-
-Usage:
-    python train.py --backbone ViT-S
-    python train.py --backbone ViT-B --batch_size 4
-    python train.py --pretrained path/to/checkpoint.ckpt
+This script sets up and runs the training pipeline using PyTorch Lightning.
+It supports:
+- Single and multi-GPU training
+- Checkpointing with customizable directory and prefix
+- Gradient norm tracking (optional)
+- Pretrained weight loading
+- Easy hyperparameter configuration
 """
 
 import os
 import argparse
+from pathlib import Path
 import torch
+from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import TensorBoardLogger
-from torch.utils.data import DataLoader
 
-from data import VideoDataset, get_video_transforms
+from config import Config
+from data import VideoDataset
+from models import VideoMAE
 from training import VideoMAELightningModule
-from config import VideoMAEConfig, get_vit_s_config, get_vit_b_config, get_vit_l_config
 
 
-def setup_seed(seed: int, deterministic: bool = False):
-    """Set random seeds for reproducibility."""
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    if deterministic:
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-    else:
-        torch.backends.cudnn.benchmark = True  # Better performance
-
-
-def create_data_loaders(config: VideoMAEConfig):
+def create_data_loaders(config: Config):
     """
     Create training and validation data loaders.
     
@@ -44,50 +35,149 @@ def create_data_loaders(config: VideoMAEConfig):
     Returns:
         Tuple of (train_loader, val_loader)
     """
-    # Get transforms
-    train_transform = get_video_transforms(mode='train', normalize=False)
-    val_transform = get_video_transforms(mode='val', normalize=False)
-    
-    # Create datasets
+    # Create training dataset
     train_dataset = VideoDataset(
-        csv_file=config.csv_file,
-        num_frames=config.num_frames,
-        temporal_stride=config.temporal_stride,
-        transform=train_transform
+        csv_file=config.data.train_csv,
+        sample_frames=config.data.sample_frames,
+        temporal_stride=config.data.temporal_stride,
     )
     
-    # Validation dataset from separate CSV file
+    # Create validation dataset
     val_dataset = VideoDataset(
-        csv_file=config.val_csv_file,
-        num_frames=config.num_frames,
-        temporal_stride=config.temporal_stride,
-        transform=val_transform
+        csv_file=config.data.val_csv,
+        sample_frames=config.data.sample_frames,
+        temporal_stride=config.data.temporal_stride,
     )
     
     # Create data loaders
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config.batch_size,
+        batch_size=config.data.batch_size,
         shuffle=True,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_memory,
-        persistent_workers=config.persistent_workers if config.num_workers > 0 else False,
-        prefetch_factor=config.prefetch_factor if config.num_workers > 0 else 2,
-        drop_last=True  # Drop last incomplete batch
+        num_workers=config.data.num_workers,
+        pin_memory=config.data.pin_memory,
+        prefetch_factor=config.data.prefetch_factor,
+        persistent_workers=True if config.data.num_workers > 0 else False,
     )
     
     val_loader = DataLoader(
         val_dataset,
-        batch_size=config.batch_size,
+        batch_size=config.data.batch_size,
         shuffle=False,
-        num_workers=config.num_workers,
-        pin_memory=config.pin_memory,
-        persistent_workers=config.persistent_workers if config.num_workers > 0 else False,
-        prefetch_factor=config.prefetch_factor if config.num_workers > 0 else 2,
-        drop_last=False
+        num_workers=config.data.num_workers,
+        pin_memory=config.data.pin_memory,
+        prefetch_factor=config.data.prefetch_factor,
+        persistent_workers=True if config.data.num_workers > 0 else False,
     )
     
     return train_loader, val_loader
+
+
+def create_model(config: Config) -> VideoMAE:
+    """
+    Create VideoMAE model.
+    
+    Args:
+        config: Configuration object
+        
+    Returns:
+        VideoMAE model instance
+    """
+    model = VideoMAE(
+        backbone=config.model.backbone,
+        img_size=config.model.img_size,
+        patch_size=config.model.patch_size,
+        tubelet_size=config.model.tubelet_size,
+        num_frames=config.model.num_frames,
+        mask_ratio=config.model.mask_ratio,
+        decoder_embed_dim=512,
+        decoder_depth=8,
+        decoder_num_heads=16,
+        dropout=0.0,
+        pretrained_weights=config.model.pretrained_weights,
+    )
+    
+    return model
+
+
+def create_lightning_module(model: VideoMAE, config: Config) -> VideoMAELightningModule:
+    """
+    Create PyTorch Lightning module.
+    
+    Args:
+        model: VideoMAE model instance
+        config: Configuration object
+        
+    Returns:
+        Lightning module instance
+    """
+    lightning_module = VideoMAELightningModule(
+        model=model,
+        learning_rate=config.training.learning_rate,
+        weight_decay=config.training.weight_decay,
+        loss_type=config.training.loss_type,
+        track_gradient_norm=config.training.track_gradient_norm,
+        gradient_clip_val=config.training.gradient_clip_val,
+    )
+    
+    return lightning_module
+
+
+def create_trainer(config: Config) -> pl.Trainer:
+    """
+    Create PyTorch Lightning trainer.
+    
+    Args:
+        config: Configuration object
+        
+    Returns:
+        PyTorch Lightning trainer instance
+    """
+    # Create checkpoint directory if it doesn't exist
+    os.makedirs(config.checkpoint.checkpoint_dir, exist_ok=True)
+    
+    # Setup checkpoint callback
+    checkpoint_callback = ModelCheckpoint(
+        dirpath=config.checkpoint.checkpoint_dir,
+        filename=f"{config.checkpoint.checkpoint_prefix}-{{epoch:02d}}-{{val_loss:.4f}}",
+        monitor=config.checkpoint.monitor,
+        mode=config.checkpoint.mode,
+        save_top_k=config.checkpoint.save_top_k,
+        save_last=config.checkpoint.save_last,
+        every_n_epochs=config.checkpoint.save_every_n_epochs,
+    )
+    
+    # Setup learning rate monitor (optional, for logging)
+    lr_monitor = LearningRateMonitor(logging_interval='step')
+    
+    # Setup logger
+    logger = TensorBoardLogger(
+        save_dir=config.checkpoint.checkpoint_dir,
+        name='logs',
+    )
+    
+    # Determine accelerator
+    if config.trainer.gpus == 0:
+        accelerator = 'cpu'
+    else:
+        accelerator = config.trainer.accelerator
+    
+    # Create trainer
+    trainer = pl.Trainer(
+        max_epochs=config.training.max_epochs,
+        accelerator=accelerator,
+        devices=config.trainer.gpus if config.trainer.gpus > 0 else None,
+        callbacks=[checkpoint_callback, lr_monitor],
+        logger=logger,
+        log_every_n_steps=config.trainer.log_every_n_steps,
+        val_check_interval=config.trainer.val_check_interval,
+        deterministic=config.trainer.deterministic,
+        benchmark=config.trainer.benchmark,
+        precision=config.trainer.precision if config.training.use_amp else 32,
+        gradient_clip_val=config.training.gradient_clip_val,
+    )
+    
+    return trainer
 
 
 def main():
@@ -95,300 +185,102 @@ def main():
     parser = argparse.ArgumentParser(description='Train VideoMAE with EVEREST masking')
     
     # Model arguments
-    parser.add_argument(
-        '--backbone',
-        type=str,
-        choices=['ViT-S', 'ViT-B', 'ViT-L'],
-        default='ViT-S',
-        help='Vision Transformer backbone'
-    )
+    parser.add_argument('--backbone', type=str, default='vit_s',
+                       choices=['vit_s', 'vit_b', 'vit_l'],
+                       help='ViT backbone type')
+    parser.add_argument('--pretrained_weights', type=str, default=None,
+                       help='Path to pretrained weights (None for random init)')
     
     # Data arguments
-    parser.add_argument(
-        '--csv_file',
-        type=str,
-        default=None,
-        help='Path to CSV file with video paths'
-    )
-    parser.add_argument(
-        '--val_csv_file',
-        type=str,
-        default=None,
-        help='Path to CSV file with validation video paths'
-    )
-    parser.add_argument(
-        '--batch_size',
-        type=int,
-        default=None,
-        help='Batch size (overrides config)'
-    )
-    parser.add_argument(
-        '--num_workers',
-        type=int,
-        default=None,
-        help='Number of data loader workers'
-    )
+    parser.add_argument('--train_csv', type=str, default='mp4_paths.csv',
+                       help='Path to training CSV file')
+    parser.add_argument('--val_csv', type=str, default='val500_2023-2024.csv',
+                       help='Path to validation CSV file')
+    parser.add_argument('--batch_size', type=int, default=8,
+                       help='Batch size')
+    parser.add_argument('--num_workers', type=int, default=4,
+                       help='Number of data loader workers')
     
     # Training arguments
-    parser.add_argument(
-        '--max_epochs',
-        type=int,
-        default=None,
-        help='Maximum number of training epochs'
-    )
-    parser.add_argument(
-        '--learning_rate',
-        type=float,
-        default=None,
-        help='Learning rate'
-    )
-    parser.add_argument(
-        '--mask_ratio',
-        type=float,
-        default=None,
-        help='Masking ratio for EVEREST'
-    )
-    
-    # Hardware arguments
-    parser.add_argument(
-        '--devices',
-        type=int,
-        default=None,
-        help='Number of GPUs to use (None = all available)'
-    )
-    parser.add_argument(
-        '--precision',
-        type=str,
-        choices=['32', '16-mixed', 'bf16-mixed'],
-        default=None,
-        help='Training precision'
-    )
+    parser.add_argument('--learning_rate', type=float, default=1e-4,
+                       help='Learning rate')
+    parser.add_argument('--weight_decay', type=float, default=0.05,
+                       help='Weight decay')
+    parser.add_argument('--max_epochs', type=int, default=100,
+                       help='Maximum number of epochs')
+    parser.add_argument('--gradient_clip_val', type=float, default=1.0,
+                       help='Gradient clipping value (None to disable)')
+    parser.add_argument('--track_gradient_norm', action='store_true',
+                       help='Track L2 norm of gradients (off by default)')
     
     # Checkpoint arguments
-    parser.add_argument(
-        '--checkpoint_dir',
-        type=str,
-        default=None,
-        help='Directory to save checkpoints'
-    )
-    parser.add_argument(
-        '--checkpoint_prefix',
-        type=str,
-        default=None,
-        help='Prefix for checkpoint filenames'
-    )
+    parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints',
+                       help='Checkpoint directory')
+    parser.add_argument('--checkpoint_prefix', type=str, default='videomae',
+                       help='Checkpoint file prefix')
     
-    # Other arguments
-    parser.add_argument(
-        '--resume',
-        type=str,
-        default=None,
-        help='Path to checkpoint to resume from (resumes full training state)'
-    )
-    parser.add_argument(
-        '--pretrained',
-        type=str,
-        default=None,
-        help='Path to pretrained model weights to initialize from (.ckpt, .pth, or .pt)'
-    )
-    parser.add_argument(
-        '--load_pretrained_strict',
-        action='store_true',
-        default=None,
-        help='Use strict loading for pretrained weights (default: True)'
-    )
-    parser.add_argument(
-        '--load_pretrained_loose',
-        action='store_true',
-        default=None,
-        help='Use loose (non-strict) loading for pretrained weights (allows partial loading)'
-    )
-    parser.add_argument(
-        '--log_gradient_norm',
-        action='store_true',
-        default=None,
-        help='Log L2 norm of full loss gradient (off by default)'
-    )
-    parser.add_argument(
-        '--seed',
-        type=int,
-        default=None,
-        help='Random seed'
-    )
-    parser.add_argument(
-        '--name',
-        type=str,
-        default=None,
-        help='Experiment name for logging'
-    )
+    # Trainer arguments
+    parser.add_argument('--gpus', type=int, default=1,
+                       help='Number of GPUs to use')
     
     args = parser.parse_args()
     
-    # Load configuration
-    if args.backbone == 'ViT-S':
-        config = get_vit_s_config()
-    elif args.backbone == 'ViT-B':
-        config = get_vit_b_config()
-    elif args.backbone == 'ViT-L':
-        config = get_vit_l_config()
-    else:
-        config = VideoMAEConfig()
+    # Create configuration from arguments
+    config = Config()
+    config.model.backbone = args.backbone
+    config.model.pretrained_weights = args.pretrained_weights
+    config.data.train_csv = args.train_csv
+    config.data.val_csv = args.val_csv
+    config.data.batch_size = args.batch_size
+    config.data.num_workers = args.num_workers
+    config.training.learning_rate = args.learning_rate
+    config.training.weight_decay = args.weight_decay
+    config.training.max_epochs = args.max_epochs
+    config.training.gradient_clip_val = args.gradient_clip_val
+    config.training.track_gradient_norm = args.track_gradient_norm
+    config.checkpoint.checkpoint_dir = args.checkpoint_dir
+    config.checkpoint.checkpoint_prefix = args.checkpoint_prefix
+    config.trainer.gpus = args.gpus
     
-    # Override with CLI arguments
-    if args.csv_file:
-        config.csv_file = args.csv_file
-    if args.val_csv_file:
-        config.val_csv_file = args.val_csv_file
-    if args.batch_size:
-        config.batch_size = args.batch_size
-    if args.num_workers:
-        config.num_workers = args.num_workers
-    if args.max_epochs:
-        config.max_epochs = args.max_epochs
-    if args.learning_rate:
-        config.learning_rate = args.learning_rate
-    if args.mask_ratio:
-        config.mask_ratio = args.mask_ratio
-    if args.devices:
-        config.devices = args.devices
-    if args.precision:
-        config.precision = args.precision
-    if args.resume:
-        config.resume_from_checkpoint = args.resume
-    if args.pretrained:
-        config.pretrained_checkpoint = args.pretrained
-    if args.load_pretrained_strict is not None:
-        config.load_pretrained_strict = True
-    if args.load_pretrained_loose is not None:
-        config.load_pretrained_strict = False
-    if args.log_gradient_norm is not None:
-        config.log_gradient_norm = args.log_gradient_norm
-    if args.seed:
-        config.seed = args.seed
-    if args.checkpoint_dir:
-        config.checkpoint_dir = args.checkpoint_dir
-    if args.checkpoint_prefix:
-        config.checkpoint_filename_prefix = args.checkpoint_prefix
-    
-    # Set experiment name
-    experiment_name = args.name or f'videomae_{config.backbone}_{config.mask_ratio}mask'
-    
-    # Setup random seed
-    setup_seed(config.seed, config.deterministic)
+    # Print configuration
+    print("=" * 80)
+    print("Training Configuration:")
+    print("=" * 80)
+    print(f"Backbone: {config.model.backbone}")
+    print(f"Pretrained weights: {config.model.pretrained_weights}")
+    print(f"Batch size: {config.data.batch_size}")
+    print(f"Learning rate: {config.training.learning_rate}")
+    print(f"Max epochs: {config.training.max_epochs}")
+    print(f"GPUs: {config.trainer.gpus}")
+    print(f"Checkpoint dir: {config.checkpoint.checkpoint_dir}")
+    print(f"Checkpoint prefix: {config.checkpoint.checkpoint_prefix}")
+    print("=" * 80)
     
     # Create data loaders
     print("Creating data loaders...")
     train_loader, val_loader = create_data_loaders(config)
-    print(f"Train batches: {len(train_loader)}, Val batches: {len(val_loader)}")
+    print(f"Training samples: {len(train_loader.dataset)}")
+    print(f"Validation samples: {len(val_loader.dataset)}")
     
-    # Create Lightning module
-    print("Initializing model...")
-    model = VideoMAELightningModule(
-        backbone=config.backbone,
-        img_size=config.img_size,
-        patch_size=config.patch_size,
-        num_frames=config.final_num_frames,
-        decoder_embed_dim=config.decoder_embed_dim,
-        decoder_depth=config.decoder_depth,
-        decoder_num_heads=config.decoder_num_heads,
-        dropout=config.dropout,
-        drop_path=config.drop_path,
-        mask_ratio=config.mask_ratio,
-        motion_weight=config.motion_weight,
-        learning_rate=config.learning_rate,
-        weight_decay=config.weight_decay,
-        beta1=config.beta1,
-        beta2=config.beta2,
-        warmup_epochs=config.warmup_epochs,
-        max_epochs=config.max_epochs,
-        norm_pix_loss=config.norm_pix_loss,
-        pretrained_checkpoint=config.pretrained_checkpoint,
-        load_pretrained_strict=config.load_pretrained_strict,
-        log_gradient_norm=config.log_gradient_norm
-    )
+    # Create model
+    print("Creating model...")
+    model = create_model(config)
+    print(f"Model created with {sum(p.numel() for p in model.parameters())} parameters")
     
-    # Create callbacks
-    callbacks = []
-    
-    # Model checkpoint callback
-    if config.enable_checkpointing:
-        # Build checkpoint filename with prefix
-        checkpoint_filename = f"{config.checkpoint_filename_prefix}-{{epoch:02d}}-{{{config.monitor_metric.replace('/', '_')}:.2f}}"
-        
-        checkpoint_callback = ModelCheckpoint(
-            dirpath=config.checkpoint_dir,
-            filename=checkpoint_filename,
-            monitor=config.monitor_metric,
-            mode=config.mode,
-            save_top_k=3,  # Save top 3 checkpoints
-            save_last=True,  # Always save last checkpoint (saved as 'last.ckpt')
-            verbose=True
-        )
-        callbacks.append(checkpoint_callback)
-    
-    # Learning rate monitor
-    lr_monitor = LearningRateMonitor(logging_interval='step')
-    callbacks.append(lr_monitor)
-    
-    # Create logger
-    logger = TensorBoardLogger(
-        save_dir='logs',
-        name=experiment_name
-    )
+    # Create lightning module
+    print("Creating Lightning module...")
+    lightning_module = create_lightning_module(model, config)
     
     # Create trainer
-    trainer = pl.Trainer(
-        accelerator=config.accelerator,
-        devices=config.devices if config.devices is not None else "auto",
-        max_epochs=config.max_epochs,
-        precision=config.precision,
-        gradient_clip_val=config.gradient_clip_val,
-        accumulate_grad_batches=config.accumulate_grad_batches,
-        log_every_n_steps=config.log_every_n_steps,
-        val_check_interval=config.val_check_interval,
-        check_val_every_n_epoch=config.check_val_every_n_epoch,
-        callbacks=callbacks,
-        logger=logger,
-        deterministic=config.deterministic,
-        enable_progress_bar=True,
-        enable_model_summary=True
-    )
+    print("Creating trainer...")
+    trainer = create_trainer(config)
     
-    # Print configuration
-    print("\n" + "="*50)
-    print("Training Configuration:")
-    print("="*50)
-    print(f"Backbone: {config.backbone}")
-    print(f"Batch size: {config.batch_size}")
-    print(f"Learning rate: {config.learning_rate}")
-    print(f"Mask ratio: {config.mask_ratio}")
-    print(f"Max epochs: {config.max_epochs}")
-    print(f"Devices: {config.devices if config.devices is not None else 'auto'}")
-    print(f"Precision: {config.precision}")
-    if config.pretrained_checkpoint:
-        print(f"Pretrained checkpoint: {config.pretrained_checkpoint}")
-        print(f"Strict loading: {config.load_pretrained_strict}")
-    if config.enable_checkpointing:
-        print(f"Checkpoint directory: {config.checkpoint_dir}")
-        print(f"Checkpoint filename prefix: {config.checkpoint_filename_prefix}")
-    if config.log_gradient_norm:
-        print(f"Gradient norm logging: Enabled")
-    print("="*50 + "\n")
-    
-    # Start training
+    # Train
     print("Starting training...")
-    trainer.fit(
-        model,
-        train_dataloaders=train_loader,
-        val_dataloaders=val_loader,
-        ckpt_path=config.resume_from_checkpoint
-    )
+    trainer.fit(lightning_module, train_loader, val_loader)
     
     print("Training completed!")
-    if config.enable_checkpointing:
-        print(f"Best checkpoint: {checkpoint_callback.best_model_path}")
 
 
 if __name__ == '__main__':
     main()
-

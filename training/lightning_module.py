@@ -1,342 +1,188 @@
 """
-PyTorch Lightning Module for VideoMAE Training
+PyTorch Lightning module for VideoMAE training.
 
-This module integrates VideoMAE model, EVEREST masking, and training logic
-into a PyTorch Lightning module for easy multi-GPU training.
+This module implements the training and validation logic using PyTorch Lightning,
+which enables easy multi-GPU training and distributed training.
 """
 
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
-from typing import Optional, Dict
+from typing import Optional, Dict, Any
 
-import sys
-import os
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from schedulefree import AdamWScheduleFree
+except ImportError:
+    raise ImportError(
+        "schedulefree is required. Please install it with: pip install schedulefree"
+    )
 
-from models.videomae import VideoMAE
-from models.everest_masking import EVERESTMaskingGenerator
+from ..models.videomae import VideoMAE
+
+
 
 
 class VideoMAELightningModule(pl.LightningModule):
     """
-    PyTorch Lightning module for training VideoMAE with EVEREST masking.
+    PyTorch Lightning module for VideoMAE training.
     
     This module handles:
-    - Model initialization
-    - Forward pass with EVEREST masking
-    - Loss computation (MSE on normalized patches)
+    - Training and validation steps
     - Optimizer configuration (AdamWScheduleFree)
-    - Learning rate scheduling
-    - Logging and metrics
+    - Loss computation
     - Gradient norm tracking (optional)
+    - Logging metrics
     """
     
     def __init__(
         self,
-        # Model parameters
-        backbone: str = 'ViT-S',
-        img_size: int = 224,
-        patch_size: int = 16,
-        num_frames: int = 16,
-        decoder_embed_dim: int = 512,
-        decoder_depth: int = 8,
-        decoder_num_heads: int = 16,
-        dropout: float = 0.0,
-        drop_path: float = 0.0,
-        # Masking parameters
-        mask_ratio: float = 0.9,
-        motion_weight: float = 0.7,
-        # Training parameters
-        learning_rate: float = 1.5e-4,
+        model: VideoMAE,
+        learning_rate: float = 1e-4,
         weight_decay: float = 0.05,
-        warmup_epochs: int = 40,
-        max_epochs: int = 800,
-        norm_pix_loss: bool = True,  # Normalize patches before computing loss
-        # Optimizer parameters (for AdamWScheduleFree)
-        beta1: float = 0.9,
-        beta2: float = 0.95,
-        # Pretrained weights
-        pretrained_checkpoint: Optional[str] = None,  # Path to pretrained checkpoint
-        load_pretrained_strict: bool = True,  # Strict loading mode
-        # Logging
-        log_gradient_norm: bool = False  # Log L2 norm of full loss gradient (off by default)
+        loss_type: str = 'mse',
+        track_gradient_norm: bool = False,
+        gradient_clip_val: Optional[float] = None,
     ):
+        """
+        Initialize VideoMAE Lightning module.
+        
+        Args:
+            model: VideoMAE model instance
+            learning_rate: Learning rate for optimizer
+            weight_decay: Weight decay for optimizer
+            loss_type: Type of loss ('mse' for mean squared error)
+            track_gradient_norm: Whether to track L2 norm of gradients
+            gradient_clip_val: Gradient clipping value (None to disable)
+        """
         super().__init__()
-        self.save_hyperparameters()
-        
-        # Initialize VideoMAE model
-        self.model = VideoMAE(
-            backbone=backbone,
-            img_size=img_size,
-            patch_size=patch_size,
-            num_frames=num_frames,
-            decoder_embed_dim=decoder_embed_dim,
-            decoder_depth=decoder_depth,
-            decoder_num_heads=decoder_num_heads,
-            dropout=dropout,
-            drop_path=drop_path
-        )
-        
-        # Load pretrained weights if provided
-        if pretrained_checkpoint is not None:
-            self.model.load_pretrained(
-                pretrained_checkpoint,
-                strict=load_pretrained_strict
-            )
-        
-        # Initialize EVEREST masking generator
-        self.masking_generator = EVERESTMaskingGenerator(
-            img_size=img_size,
-            patch_size=patch_size,
-            num_frames=num_frames,
-            mask_ratio=mask_ratio,
-            motion_weight=motion_weight
-        )
-        
-        # Store training parameters
+        self.model = model
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
-        self.warmup_epochs = warmup_epochs
-        self.max_epochs = max_epochs
-        self.norm_pix_loss = norm_pix_loss
-        self.beta1 = beta1
-        self.beta2 = beta2
-        self.log_gradient_norm = log_gradient_norm
+        self.loss_type = loss_type
+        self.track_gradient_norm = track_gradient_norm
+        self.gradient_clip_val = gradient_clip_val
         
-        # Loss function (MSE)
-        self.criterion = nn.MSELoss(reduction='none')
+        # Store patchify function parameters
+        self.patch_size = model.encoder.patch_embed.patch_size
+        self.tubelet_size = model.encoder.patch_embed.tubelet_size
+        self.embed_dim = model.encoder.embed_dim
+        
+        # Loss function
+        if loss_type == 'mse':
+            self.criterion = nn.MSELoss(reduction='none')
+        else:
+            raise ValueError(f"Unknown loss type: {loss_type}")
     
-    def forward(
-        self,
-        x: torch.Tensor,
-        mask: Optional[torch.Tensor] = None
-    ) -> Dict[str, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         """
         Forward pass through the model.
         
         Args:
             x: Input video tensor of shape (B, T, H, W, C)
-            mask: Optional pre-computed mask (if None, generates EVEREST mask)
             
         Returns:
-            Dictionary with predictions and targets
+            Dictionary containing model outputs
         """
-        # Generate mask if not provided
-        if mask is None:
-            mask = self.masking_generator(x)
-        
-        # Forward through model
-        pred, target = self.model(x, mask)
-        
-        return {
-            'pred': pred,
-            'target': target,
-            'mask': mask
-        }
+        return self.model(x)
     
-    def compute_loss(
-        self,
-        pred: torch.Tensor,
-        target: torch.Tensor,
-        mask: torch.Tensor
-    ) -> torch.Tensor:
-        """
-        Compute reconstruction loss.
-        
-        Args:
-            pred: Predicted patches of shape (B, num_patches, patch_size^2 * 3)
-            target: Target patches of shape (B, num_patches, patch_size^2 * 3)
-            mask: Binary mask of shape (B, num_patches) - 1 for visible, 0 for masked
-            
-        Returns:
-            Scalar loss value
-        """
-        # Only compute loss on masked patches (where mask == 0)
-        # In VideoMAE, we predict masked patches, so loss is on masked positions
-        loss_per_patch = self.criterion(pred, target)  # (B, num_patches, patch_size^2 * 3)
-        loss_per_patch = loss_per_patch.mean(dim=-1)  # (B, num_patches) - mean over patch pixels
-        
-        # Normalize patches if specified (per-patch normalization)
-        if self.norm_pix_loss:
-            # Normalize target patches
-            target_mean = target.mean(dim=-1, keepdim=True)  # (B, num_patches, 1)
-            target_std = target.std(dim=-1, keepdim=True) + 1e-6  # (B, num_patches, 1)
-            target_norm = (target - target_mean) / target_std
-            
-            # Normalize predicted patches
-            pred_mean = pred.mean(dim=-1, keepdim=True)
-            pred_std = pred.std(dim=-1, keepdim=True) + 1e-6
-            pred_norm = (pred - pred_mean) / pred_std
-            
-            # Recompute loss on normalized patches
-            loss_per_patch = self.criterion(pred_norm, target_norm).mean(dim=-1)
-        
-        # Only compute loss on masked patches (mask == 0 means masked)
-        mask_loss = (1 - mask)  # Invert: 1 for masked, 0 for visible
-        loss = (loss_per_patch * mask_loss).sum() / mask_loss.sum()
-        
-        return loss
-    
-    def training_step(
-        self,
-        batch: torch.Tensor,
-        batch_idx: int
-    ) -> torch.Tensor:
+    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         """
         Training step.
         
         Args:
-            batch: Video tensor of shape (B, T, H, W, C)
+            batch: Batch of videos of shape (B, T, H, W, C)
             batch_idx: Batch index
             
         Returns:
-            Loss value
+            Loss tensor
         """
-        # Forward pass
-        outputs = self.forward(batch)
-        pred = outputs['pred']
-        target = outputs['target']
-        mask = outputs['mask']
+        # Forward pass with loss computation
+        loss, pred, target = self.model.forward_loss(batch)
         
-        # Compute loss
-        loss = self.compute_loss(pred, target, mask)
-        
-        # Logging
+        # Log training loss
         self.log(
-            'train/loss',
+            'train_loss',
             loss,
             on_step=True,
             on_epoch=True,
             prog_bar=True,
-            logger=True
+            logger=True,
         )
         
-        # Log mask ratio (should be close to mask_ratio)
-        mask_ratio_actual = 1.0 - mask.mean()
-        self.log(
-            'train/mask_ratio',
-            mask_ratio_actual,
-            on_step=False,
-            on_epoch=True,
-            logger=True
-        )
+        # Track gradient norm if enabled
+        if self.track_gradient_norm:
+            # Compute gradient norm
+            total_norm = 0.0
+            param_count = 0
+            for p in self.model.parameters():
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2)
+                    total_norm += param_norm.item() ** 2
+                    param_count += 1
+            
+            if param_count > 0:
+                total_norm = total_norm ** (1. / 2)
+                self.log(
+                    'grad_norm',
+                    total_norm,
+                    on_step=True,
+                    on_epoch=False,
+                    prog_bar=False,
+                    logger=True,
+                )
         
         return loss
     
-    def validation_step(
-        self,
-        batch: torch.Tensor,
-        batch_idx: int
-    ) -> Dict[str, torch.Tensor]:
+    def validation_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
         """
-        Validation step (optional, for monitoring).
+        Validation step.
         
         Args:
-            batch: Video tensor
+            batch: Batch of videos of shape (B, T, H, W, C)
             batch_idx: Batch index
             
         Returns:
-            Dictionary with validation metrics
+            Loss tensor
         """
-        # Forward pass
-        outputs = self.forward(batch)
-        pred = outputs['pred']
-        target = outputs['target']
-        mask = outputs['mask']
+        # Forward pass with loss computation
+        loss, pred, target = self.model.forward_loss(batch)
         
-        # Compute loss
-        loss = self.compute_loss(pred, target, mask)
-        
-        # Logging
+        # Log validation loss
         self.log(
-            'val/loss',
+            'val_loss',
             loss,
             on_step=False,
             on_epoch=True,
             prog_bar=True,
-            logger=True
+            logger=True,
         )
         
-        return {'val_loss': loss}
+        return loss
     
-    def on_after_backward(self):
-        """Called after backward pass. Log gradient norm if enabled."""
-        if self.log_gradient_norm:
-            # Compute L2 norm of all gradients
-            total_norm = 0.0
-            for p in self.parameters():
-                if p.grad is not None:
-                    param_norm = p.grad.data.norm(2)
-                    total_norm += param_norm.item() ** 2
-            total_norm = total_norm ** (1. / 2)
-            
-            self.log(
-                'train/gradient_norm',
-                total_norm,
-                on_step=True,
-                on_epoch=False,
-                prog_bar=False,
-                logger=True
-            )
-    
-    def configure_optimizers(self):
+    def configure_optimizers(self) -> torch.optim.Optimizer:
         """
-        Configure optimizer and learning rate scheduler.
+        Configure optimizer (AdamWScheduleFree).
         
-        Uses AdamWScheduleFree optimizer which doesn't require a scheduler,
-        but we can still use warmup if needed.
+        Returns:
+            Optimizer instance
         """
-        try:
-            from schedulefree import AdamWScheduleFree
-            
-            # Create optimizer
-            optimizer = AdamWScheduleFree(
-                self.parameters(),
-                lr=self.learning_rate,
-                weight_decay=self.weight_decay,
-                betas=(self.beta1, self.beta2)
-            )
-            
-            # AdamWScheduleFree doesn't need a scheduler
-            return optimizer
-            
-        except ImportError:
-            # Fallback to standard AdamW if schedulefree is not available
-            print("Warning: schedulefree not available, using AdamW instead")
-            from torch.optim.lr_scheduler import CosineAnnealingLR
-            
-            optimizer = torch.optim.AdamW(
-                self.parameters(),
-                lr=self.learning_rate,
-                weight_decay=self.weight_decay,
-                betas=(self.beta1, self.beta2)
-            )
-            
-            # Add cosine annealing scheduler
-            scheduler = CosineAnnealingLR(
-                optimizer,
-                T_max=self.max_epochs,
-                eta_min=1e-6
-            )
-            
-            return {
-                'optimizer': optimizer,
-                'lr_scheduler': {
-                    'scheduler': scheduler,
-                    'interval': 'epoch',
-                    'frequency': 1
-                }
-            }
+        optimizer = AdamWScheduleFree(
+            self.model.parameters(),
+            lr=self.learning_rate,
+            weight_decay=self.weight_decay,
+        )
+        
+        return optimizer
     
-    def on_train_epoch_start(self):
-        """Called at the start of each training epoch."""
-        # Log learning rate
-        if self.trainer.optimizers:
-            opt = self.trainer.optimizers[0]
-            if hasattr(opt, 'lr'):
-                self.log('train/lr', opt.lr, on_step=False, on_epoch=True)
-            elif hasattr(opt, 'param_groups'):
-                self.log('train/lr', opt.param_groups[0]['lr'], on_step=False, on_epoch=True)
-
+    def on_before_optimizer_step(self, optimizer, optimizer_idx):
+        """
+        Hook called before optimizer step.
+        Used for gradient clipping if enabled.
+        """
+        if self.gradient_clip_val is not None:
+            # Clip gradients
+            self.clip_gradients(
+                optimizer,
+                gradient_clip_val=self.gradient_clip_val,
+                gradient_clip_algorithm='norm',
+            )
