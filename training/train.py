@@ -57,6 +57,10 @@ def parse_args():
                         help='Number of consecutive frames to sample')
     parser.add_argument('--temporal_stride', type=int, default=None,
                         help='Temporal stride for downsampling')
+    parser.add_argument('--train_dataset_ratio', type=float, default=None,
+                        help='Ratio of training dataset to use (0.0-1.0). If None, uses all data (default: None)')
+    parser.add_argument('--dataset_random_seed', type=int, default=None,
+                        help='Random seed for dataset sampling (default: None)')
     
     # Model arguments
     parser.add_argument('--backbone', type=str, default=None,
@@ -138,6 +142,12 @@ def parse_args():
         args.num_frames_to_sample = config.get('data', {}).get('num_frames_to_sample', 32)
     if args.temporal_stride is None:
         args.temporal_stride = config.get('data', {}).get('temporal_stride', 2)
+    if args.train_dataset_ratio is None:
+        train_ratio = config.get('data', {}).get('train_dataset_ratio')
+        args.train_dataset_ratio = train_ratio if train_ratio is not None else None
+    if args.dataset_random_seed is None:
+        seed = config.get('data', {}).get('dataset_random_seed')
+        args.dataset_random_seed = seed if seed is not None else None
     
     # Model config
     if args.backbone is None:
@@ -205,14 +215,18 @@ def create_data_loaders(args):
         csv_file=args.train_csv,
         num_frames_to_sample=args.num_frames_to_sample,
         temporal_stride=args.temporal_stride,
-        frame_size=(args.img_size, args.img_size)
+        frame_size=(args.img_size, args.img_size),
+        dataset_ratio=args.train_dataset_ratio,  # Only apply to training dataset
+        random_seed=args.dataset_random_seed
     )
     
     val_dataset = VideoDataset(
         csv_file=args.val_csv,
         num_frames_to_sample=args.num_frames_to_sample,
         temporal_stride=args.temporal_stride,
-        frame_size=(args.img_size, args.img_size)
+        frame_size=(args.img_size, args.img_size),
+        dataset_ratio=None,  # Always use full validation dataset
+        random_seed=None
     )
     
     # Create data loaders

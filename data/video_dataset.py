@@ -25,6 +25,8 @@ class VideoDataset(Dataset):
         num_frames_to_sample (int): Number of consecutive frames to sample (default: 32)
         temporal_stride (int): Stride for temporal downsampling (default: 2)
         frame_size (tuple): Expected frame size (height, width), default: (224, 224)
+        dataset_ratio (Optional[float]): Ratio of dataset to use (0.0-1.0). If None, uses all data (default: None)
+        random_seed (Optional[int]): Random seed for dataset sampling (default: None)
     """
     
     def __init__(
@@ -33,22 +35,44 @@ class VideoDataset(Dataset):
         transform: Optional[Callable] = None,
         num_frames_to_sample: int = 32,
         temporal_stride: int = 2,
-        frame_size: tuple = (224, 224)
+        frame_size: tuple = (224, 224),
+        dataset_ratio: Optional[float] = None,
+        random_seed: Optional[int] = None
     ):
         # Read video paths from CSV file
         # Handle both with and without header
         try:
             df = pd.read_csv(csv_file, header=None)
             # Assume first column contains paths
-            self.video_paths = df[0].tolist()
+            video_paths = df[0].tolist()
         except Exception as e:
             # If CSV has header, try reading with header
             df = pd.read_csv(csv_file)
             if 'path' in df.columns:
-                self.video_paths = df['path'].tolist()
+                video_paths = df['path'].tolist()
             else:
                 # Use first column
-                self.video_paths = df.iloc[:, 0].tolist()
+                video_paths = df.iloc[:, 0].tolist()
+        
+        # Randomly sample subset of dataset if dataset_ratio is specified
+        if dataset_ratio is not None:
+            if not (0.0 < dataset_ratio <= 1.0):
+                raise ValueError(f"dataset_ratio must be between 0.0 and 1.0, got {dataset_ratio}")
+            
+            # Set random seed if provided for reproducibility
+            if random_seed is not None:
+                random.seed(random_seed)
+            
+            # Calculate number of samples to keep
+            total_samples = len(video_paths)
+            num_samples = int(total_samples * dataset_ratio)
+            
+            # Randomly sample without replacement
+            self.video_paths = random.sample(video_paths, num_samples)
+            
+            print(f"Using {len(self.video_paths)}/{total_samples} samples ({dataset_ratio*100:.1f}%) from {csv_file}")
+        else:
+            self.video_paths = video_paths
         
         self.transform = transform
         self.num_frames_to_sample = num_frames_to_sample

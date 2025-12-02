@@ -9,6 +9,8 @@ data:
   num_workers: 4
   num_frames_to_sample: 32
   temporal_stride: 2
+  train_dataset_ratio: null  # Ratio of training dataset to use (0.0-1.0). If null, uses all data
+  dataset_random_seed: null  # Random seed for dataset sampling (for reproducibility)
 
 # Model configuration
 model:
