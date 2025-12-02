@@ -277,7 +277,7 @@ def main():
         precision=args.precision,
         callbacks=callbacks,
         logger=logger,
-        resume_from_checkpoint=args.resume_from_checkpoint,
+        ckpt_path=args.resume_from_checkpoint,  # Changed from resume_from_checkpoint in PL 2.0+
         log_every_n_steps=10,
         val_check_interval=0.5,  # Validate twice per epoch
         gradient_clip_val=1.0,  # Gradient clipping for stability
