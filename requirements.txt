@@ -1,20 +1,10 @@
-# Core dependencies
 torch>=2.0.0
 torchvision>=0.15.0
 pytorch-lightning>=2.0.0
-
-# Video processing
-torchcodec>=0.1.0
-
-# Optimizer
 schedulefree>=1.0.0
+opencv-python>=4.8.0
+pandas>=2.0.0
+numpy>=1.24.0
+pyyaml>=6.0
+tensorboard>=2.13.0
 
-# Data processing
-pandas>=1.5.0
-numpy>=1.23.0
-
-# Logging and visualization
-tensorboard>=2.12.0
-
-# Optional: for experiment tracking
-# wandb>=0.15.0

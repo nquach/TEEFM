@@ -1,80 +1,63 @@
 """
-Video dataset implementation using torchcodec for efficient video decoding.
+Video Dataset Module for VideoMAE Training
 
-This module implements a PyTorch Dataset class that:
-- Reads video file paths from CSV files
-- Uses torchcodec VideoDecoder to decode MP4 videos
-- Randomly samples consecutive frames
-- Applies temporal downsampling with specified stride
+This module implements a PyTorch Dataset class for loading and processing video files
+for VideoMAE training. Videos are expected to be 224x224x3 and are processed by:
+1. Randomly sampling 32 consecutive frames
+2. Temporally downsampling with stride 2 to get 16 frames
 """
 
 import torch
 from torch.utils.data import Dataset
 import pandas as pd
+import cv2
 import numpy as np
 from typing import Optional, Callable
-import os
-
-try:
-    from torchcodec import VideoDecoder
-except ImportError:
-    raise ImportError(
-        "torchcodec is required. Please install it with: pip install torchcodec"
-    )
+import random
 
 
 class VideoDataset(Dataset):
     """
-    PyTorch Dataset for loading video data from MP4 files.
-    
-    The dataset assumes videos are already preprocessed to 224x224x3 resolution.
-    It randomly samples consecutive frames and applies temporal downsampling.
+    Dataset class for loading videos from CSV file paths.
     
     Args:
-        csv_file: Path to CSV file containing video file paths (one per line)
-        sample_frames: Number of consecutive frames to sample (default: 32)
-        temporal_stride: Stride for temporal downsampling (default: 2)
-        transform: Optional transform to apply to frames
+        csv_file (str): Path to CSV file containing video file paths (one per line)
+        transform (Optional[Callable]): Optional transform to apply to video frames
+        num_frames_to_sample (int): Number of consecutive frames to sample (default: 32)
+        temporal_stride (int): Stride for temporal downsampling (default: 2)
+        frame_size (tuple): Expected frame size (height, width), default: (224, 224)
     """
     
     def __init__(
         self,
         csv_file: str,
-        sample_frames: int = 32,
-        temporal_stride: int = 2,
         transform: Optional[Callable] = None,
+        num_frames_to_sample: int = 32,
+        temporal_stride: int = 2,
+        frame_size: tuple = (224, 224)
     ):
-        """
-        Initialize the VideoDataset.
-        
-        Args:
-            csv_file: Path to CSV file with video paths
-            sample_frames: Number of frames to sample before downsampling
-            temporal_stride: Stride for temporal downsampling
-            transform: Optional transform function
-        """
-        self.sample_frames = sample_frames
-        self.temporal_stride = temporal_stride
-        self.transform = transform
-        
         # Read video paths from CSV file
-        # CSV format: one path per line (no header expected)
+        # Handle both with and without header
         try:
-            df = pd.read_csv(csv_file, header=None, names=['path'])
-            self.video_paths = df['path'].tolist()
+            df = pd.read_csv(csv_file, header=None)
+            # Assume first column contains paths
+            self.video_paths = df[0].tolist()
         except Exception as e:
-            raise ValueError(f"Error reading CSV file {csv_file}: {e}")
+            # If CSV has header, try reading with header
+            df = pd.read_csv(csv_file)
+            if 'path' in df.columns:
+                self.video_paths = df['path'].tolist()
+            else:
+                # Use first column
+                self.video_paths = df.iloc[:, 0].tolist()
         
-        # Filter out non-existent files
-        self.video_paths = [
-            path for path in self.video_paths 
-            if os.path.exists(path.strip())
-        ]
+        self.transform = transform
+        self.num_frames_to_sample = num_frames_to_sample
+        self.temporal_stride = temporal_stride
+        self.frame_size = frame_size
         
-        if len(self.video_paths) == 0:
-            raise ValueError(f"No valid video files found in {csv_file}")
-        
-        print(f"Loaded {len(self.video_paths)} video paths from {csv_file}")
+        # Calculate final number of frames after downsampling
+        self.num_frames = num_frames_to_sample // temporal_stride
     
     def __len__(self) -> int:
         """Return the number of videos in the dataset."""
@@ -82,76 +65,63 @@ class VideoDataset(Dataset):
     
     def __getitem__(self, idx: int) -> torch.Tensor:
         """
-        Get a video sample.
+        Load and process a video.
         
         Args:
-            idx: Index of the video to load
+            idx (int): Index of the video to load
             
         Returns:
-            Tensor of shape (T, H, W, C) where:
-            - T: Number of frames after downsampling (sample_frames // temporal_stride)
-            - H: Height (224)
-            - W: Width (224)
-            - C: Channels (3)
+            torch.Tensor: Video tensor of shape (C, T, H, W) where:
+                C = 3 (RGB channels)
+                T = 16 (number of frames after downsampling)
+                H, W = 224 (frame dimensions)
         """
-        video_path = self.video_paths[idx].strip()
+        video_path = self.video_paths[idx]
         
-        try:
-            # Initialize video decoder
-            decoder = VideoDecoder(video_path)
-            
-            # Get total number of frames in the video
-            total_frames = decoder.frame_count
-            
-            # Ensure we have enough frames
-            if total_frames < self.sample_frames:
-                # If video is shorter than required, pad by repeating frames
-                # or sample with replacement
-                start_frame = 0
-                num_frames_to_read = min(self.sample_frames, total_frames)
-            else:
-                # Randomly sample starting frame
-                max_start = total_frames - self.sample_frames
-                start_frame = np.random.randint(0, max_start + 1)
-                num_frames_to_read = self.sample_frames
-            
-            # Read frames using torchcodec
-            # VideoDecoder.read() returns frames as a tensor
-            frames = decoder.read(start_frame, num_frames_to_read)
-            
-            # Handle case where we got fewer frames than requested
-            if frames.shape[0] < self.sample_frames:
-                # Pad by repeating the last frame
-                last_frame = frames[-1:].repeat(self.sample_frames - frames.shape[0], 1, 1, 1)
-                frames = torch.cat([frames, last_frame], dim=0)
-            
-            # Apply temporal downsampling with stride
-            # frames shape: (T, C, H, W) from torchcodec
-            frames = frames[::self.temporal_stride]
-            
-            # Convert to (T, H, W, C) format if needed
-            # torchcodec typically returns (T, C, H, W), but we want (T, H, W, C)
-            if frames.dim() == 4 and frames.shape[1] == 3:
-                frames = frames.permute(0, 2, 3, 1)
-            
-            # Normalize to [0, 1] if not already
-            if frames.max() > 1.0:
-                frames = frames.float() / 255.0
-            
-            # Apply transform if provided
-            if self.transform is not None:
-                frames = self.transform(frames)
-            
-            return frames
-            
-        except Exception as e:
-            # If there's an error loading the video, return a zero tensor
-            # This allows training to continue even if some videos are corrupted
-            print(f"Warning: Error loading video {video_path}: {e}")
-            # Return a dummy tensor with correct shape
-            num_output_frames = self.sample_frames // self.temporal_stride
-            dummy = torch.zeros(
-                num_output_frames, 224, 224, 3,
-                dtype=torch.float32
-            )
-            return dummy
+        # Load video frames using OpenCV
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f"Could not open video file: {video_path}")
+        
+        frames = []
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            # Convert BGR to RGB
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frames.append(frame)
+        
+        cap.release()
+        
+        # Check if video has enough frames
+        if len(frames) < self.num_frames_to_sample:
+            # If not enough frames, pad by repeating the last frame
+            num_padding = self.num_frames_to_sample - len(frames)
+            frames.extend([frames[-1]] * num_padding)
+        
+        # Randomly sample num_frames_to_sample consecutive frames
+        max_start_idx = len(frames) - self.num_frames_to_sample
+        if max_start_idx < 0:
+            start_idx = 0
+        else:
+            start_idx = random.randint(0, max_start_idx)
+        
+        sampled_frames = frames[start_idx:start_idx + self.num_frames_to_sample]
+        
+        # Temporally downsample with stride
+        downsampled_frames = sampled_frames[::self.temporal_stride]
+        
+        # Convert to numpy array and normalize to [0, 1]
+        video_array = np.stack(downsampled_frames, axis=0)  # Shape: (T, H, W, C)
+        video_array = video_array.astype(np.float32) / 255.0
+        
+        # Convert to tensor and rearrange to (C, T, H, W)
+        video_tensor = torch.from_numpy(video_array).permute(3, 0, 1, 2)  # (C, T, H, W)
+        
+        # Apply transform if provided
+        if self.transform is not None:
+            video_tensor = self.transform(video_tensor)
+        
+        return video_tensor
+
