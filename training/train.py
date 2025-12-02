@@ -258,15 +258,26 @@ def main():
     
     # Create trainer
     print("Creating PyTorch Lightning trainer...")
+    
+    # Determine accelerator and devices (PyTorch Lightning 2.0+ API)
+    if torch.cuda.is_available() and args.gpus > 0:
+        accelerator = 'gpu'
+        devices = args.gpus
+        strategy = 'ddp' if args.gpus > 1 else 'auto'
+    else:
+        accelerator = 'cpu'
+        devices = 1
+        strategy = 'auto'
+    
     trainer = pl.Trainer(
         max_epochs=args.max_epochs,
-        gpus=args.gpus if torch.cuda.is_available() else 0,
+        accelerator=accelerator,
+        devices=devices,
+        strategy=strategy,
         precision=args.precision,
         callbacks=callbacks,
         logger=logger,
         resume_from_checkpoint=args.resume_from_checkpoint,
-        accelerator='gpu' if torch.cuda.is_available() and args.gpus > 0 else 'cpu',
-        strategy='ddp' if args.gpus > 1 else None,
         log_every_n_steps=10,
         val_check_interval=0.5,  # Validate twice per epoch
         gradient_clip_val=1.0,  # Gradient clipping for stability
