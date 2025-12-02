@@ -77,7 +77,7 @@ class CheckpointConfig:
     checkpoint_prefix: str = 'videomae'
     
     # Checkpoint saving strategy
-    save_top_k: int = 3  # Save top k checkpoints based on validation loss
+    save_top_k: int = 1  # Save top k checkpoints based on validation loss
     monitor: str = 'val_loss'  # Metric to monitor
     mode: str = 'min'  # 'min' for loss, 'max' for accuracy
     
