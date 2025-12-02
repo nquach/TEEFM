@@ -1,0 +1,105 @@
+# VideoMAE EVEREST Training Configuration
+
+# Model configuration
+model:
+  # Backbone architecture: 'ViT-S', 'ViT-B', or 'ViT-L'
+  backbone: 'ViT-S'
+  
+  # Path to pretrained weights checkpoint (optional, set to null for random initialization)
+  pretrained_weights: null
+  
+  # Image size (patches are extracted from this size)
+  img_size: 224
+  
+  # Patch size for Vision Transformer
+  patch_size: 16
+  
+  # Number of frames in the input sequence (after temporal downsampling)
+  num_frames: 16
+  
+  # Masking ratio for EVEREST (fraction of tokens to mask)
+  mask_ratio: 0.75
+
+# Data configuration
+data:
+  # Path to training CSV file (one video path per line)
+  train_csv: 'mp4_paths.csv'
+  
+  # Path to validation CSV file (one video path per line)
+  val_csv: 'val500_2023-2024.csv'
+  
+  # Number of consecutive frames to sample from each video
+  sample_frames: 32
+  
+  # Temporal stride for downsampling (sample_frames / temporal_stride = num_frames)
+  temporal_stride: 2
+  
+  # Number of data loading workers
+  num_workers: 4
+  
+  # Whether to use a random subset of the training dataset
+  use_subset: false
+  
+  # Ratio of dataset to use if use_subset is true (0.0 to 1.0)
+  subset_ratio: 0.1
+
+# Training configuration
+training:
+  # Batch size per GPU
+  batch_size: 8
+  
+  # Learning rate
+  learning_rate: 1.0e-4
+  
+  # Weight decay for optimizer
+  weight_decay: 0.05
+  
+  # Maximum number of training epochs
+  max_epochs: 100
+  
+  # Number of GPUs to use (0 for CPU, or number of GPUs)
+  gpus: 1
+  
+  # Accumulate gradients over N batches (useful for large effective batch sizes)
+  accumulate_grad_batches: 1
+  
+  # Gradient clipping value (set to 0 to disable)
+  gradient_clip_val: 1.0
+  
+  # Whether to track L2 norm of total loss gradient (off by default)
+  track_gradient_norm: false
+  
+  # Precision: '32', '16', or 'bf16'
+  precision: 32
+
+# Checkpoint configuration
+checkpoint:
+  # Directory to save checkpoints
+  dir: './checkpoints'
+  
+  # Prefix for checkpoint filenames
+  prefix: 'videomae_everest'
+  
+  # Save top K checkpoints based on validation loss
+  save_top_k: 3
+  
+  # Monitor which metric for checkpoint saving
+  monitor: 'val_loss'
+  
+  # Mode for monitoring ('min' for loss, 'max' for accuracy)
+  mode: 'min'
+  
+  # Save checkpoint every N epochs
+  save_every_n_epochs: 10
+
+# Logging configuration
+logging:
+  # Logging directory
+  log_dir: './logs'
+  
+  # Log every N steps
+  log_every_n_steps: 50
+  
+  # Name for the experiment (used in logging)
+  experiment_name: 'videomae_everest'
+

@@ -1,94 +1,159 @@
 """
-VideoMAE model implementation with ViT backbone.
+VideoMAE Model with EVEREST Masking.
 
-This module implements the VideoMAE (Masked Video Autoencoder) architecture
-using Vision Transformer (ViT) backbones. Supports ViT-S, ViT-B, and ViT-L variants.
+This module implements the Video Masked Autoencoder (VideoMAE) architecture
+with EVEREST masking strategy for efficient video representation learning.
+
+The model consists of:
+1. Patch embedding layer to convert video frames to tokens
+2. Temporal and positional embeddings
+3. Vision Transformer encoder
+4. Decoder for reconstruction
+5. EVEREST masking integration
 """
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 from typing import Optional, Tuple
 
+from models.everest_masking import EverestMaskingGenerator
 
-class PatchEmbedding3D(nn.Module):
+
+class PatchEmbed(nn.Module):
     """
-    3D patch embedding for video data.
+    Patch embedding layer to convert video frames into tokens.
     
-    Divides video into spatio-temporal patches and projects them to embedding space.
-    
-    Args:
-        img_size (int): Spatial size of input frames (assumed square).
-        patch_size (int): Size of spatial patches.
-        tubelet_size (int): Size of temporal tubelets.
-        in_channels (int): Number of input channels (default: 3 for RGB).
-        embed_dim (int): Embedding dimension.
+    Splits each frame into non-overlapping patches and projects them
+    to the embedding dimension.
     """
     
     def __init__(
         self,
         img_size: int = 224,
         patch_size: int = 16,
-        tubelet_size: int = 2,
-        in_channels: int = 3,
-        embed_dim: int = 768,
+        in_chans: int = 3,
+        embed_dim: int = 768
     ):
+        """
+        Initialize patch embedding layer.
+        
+        Args:
+            img_size: Size of input image (assumed square)
+            patch_size: Size of each patch
+            in_chans: Number of input channels
+            embed_dim: Embedding dimension
+        """
         super().__init__()
         self.img_size = img_size
         self.patch_size = patch_size
-        self.tubelet_size = tubelet_size
-        self.embed_dim = embed_dim
+        self.num_patches = (img_size // patch_size) ** 2
         
-        # Calculate number of patches per frame
-        self.num_patches_per_frame = (img_size // patch_size) ** 2
-        
-        # 3D convolution to extract tubelets and project to embedding
-        self.proj = nn.Conv3d(
-            in_channels,
+        # Convolutional layer to extract patches and project to embed_dim
+        self.proj = nn.Conv2d(
+            in_chans,
             embed_dim,
-            kernel_size=(tubelet_size, patch_size, patch_size),
-            stride=(tubelet_size, patch_size, patch_size),
+            kernel_size=patch_size,
+            stride=patch_size
         )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass.
+        Forward pass through patch embedding.
         
         Args:
-            x: Input video tensor of shape (B, T, C, H, W)
+            x: Input tensor of shape [B, T, C, H, W]
             
         Returns:
-            Patch embeddings of shape (B, N, embed_dim) where N is number of patches
+            Patch embeddings of shape [B, T*num_patches, embed_dim]
         """
         B, T, C, H, W = x.shape
         
-        # Reshape to (B, C, T, H, W) for Conv3d
-        x = x.permute(0, 2, 1, 3, 4)
+        # Reshape to process all frames at once
+        x = x.view(B * T, C, H, W)
         
-        # Apply 3D convolution to extract patches
-        x = self.proj(x)  # (B, embed_dim, T', H', W')
+        # Extract patches and project
+        x = self.proj(x)  # [B*T, embed_dim, H', W'] where H'=W'=img_size//patch_size
         
-        # Flatten spatial and temporal dimensions
-        B, embed_dim, T_new, H_new, W_new = x.shape
-        x = x.flatten(2).transpose(1, 2)  # (B, N, embed_dim)
+        # Flatten spatial dimensions
+        x = x.flatten(2).transpose(1, 2)  # [B*T, num_patches, embed_dim]
+        
+        # Reshape to separate temporal dimension
+        x = x.view(B, T * self.num_patches, -1)
         
         return x
 
 
-class PositionalEncoding3D(nn.Module):
+class PositionalEncoding(nn.Module):
     """
-    3D positional encoding for video patches.
-    
-    Adds learnable positional embeddings to patch embeddings.
+    Learnable positional encoding for spatial patches.
     """
     
     def __init__(self, num_patches: int, embed_dim: int):
+        """
+        Initialize positional encoding.
+        
+        Args:
+            num_patches: Number of spatial patches per frame
+            embed_dim: Embedding dimension
+        """
         super().__init__()
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, embed_dim))
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Add positional encoding to input embeddings."""
-        return x + self.pos_embed
+        """
+        Add positional encoding.
+        
+        Args:
+            x: Input tensor of shape [B, T*num_patches, embed_dim]
+            
+        Returns:
+            Tensor with positional encoding added
+        """
+        return x + self.pos_embed.repeat(x.shape[0], x.shape[1] // self.pos_embed.shape[1], 1)
+
+
+class TemporalEmbedding(nn.Module):
+    """
+    Learnable temporal embedding for video frames.
+    """
+    
+    def __init__(self, num_frames: int, embed_dim: int):
+        """
+        Initialize temporal embedding.
+        
+        Args:
+            num_frames: Number of frames in the video
+            embed_dim: Embedding dimension
+        """
+        super().__init__()
+        self.temp_embed = nn.Parameter(torch.zeros(1, num_frames, embed_dim))
+    
+    def forward(self, x: torch.Tensor, num_patches: int) -> torch.Tensor:
+        """
+        Add temporal embedding.
+        
+        Args:
+            x: Input tensor of shape [B, T*num_patches, embed_dim]
+            num_patches: Number of spatial patches per frame
+            
+        Returns:
+            Tensor with temporal encoding added
+        """
+        B, _, embed_dim = x.shape
+        T = self.temp_embed.shape[1]
+        
+        # Reshape to separate temporal dimension
+        x = x.view(B, T, num_patches, embed_dim)
+        
+        # Add temporal embedding
+        x = x + self.temp_embed.unsqueeze(2)  # [B, T, num_patches, embed_dim]
+        
+        # Reshape back
+        x = x.view(B, T * num_patches, embed_dim)
+        
+        return x
 
 
 class TransformerBlock(nn.Module):
@@ -101,365 +166,434 @@ class TransformerBlock(nn.Module):
         embed_dim: int,
         num_heads: int,
         mlp_ratio: float = 4.0,
-        dropout: float = 0.1,
+        qkv_bias: bool = True,
+        drop_rate: float = 0.0,
+        attn_drop_rate: float = 0.0
     ):
+        """
+        Initialize transformer block.
+        
+        Args:
+            embed_dim: Embedding dimension
+            num_heads: Number of attention heads
+            mlp_ratio: Ratio of MLP hidden dim to embed_dim
+            qkv_bias: Whether to use bias in QKV projection
+            drop_rate: Dropout rate
+            attn_drop_rate: Attention dropout rate
+        """
         super().__init__()
         self.norm1 = nn.LayerNorm(embed_dim)
         self.attn = nn.MultiheadAttention(
-            embed_dim, num_heads, dropout=dropout, batch_first=True
+            embed_dim,
+            num_heads,
+            dropout=attn_drop_rate,
+            bias=qkv_bias,
+            batch_first=True
         )
         self.norm2 = nn.LayerNorm(embed_dim)
-        
         mlp_hidden_dim = int(embed_dim * mlp_ratio)
         self.mlp = nn.Sequential(
             nn.Linear(embed_dim, mlp_hidden_dim),
             nn.GELU(),
-            nn.Dropout(dropout),
+            nn.Dropout(drop_rate),
             nn.Linear(mlp_hidden_dim, embed_dim),
-            nn.Dropout(dropout),
+            nn.Dropout(drop_rate)
         )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass through transformer block."""
-        # Self-attention with residual
+        """
+        Forward pass through transformer block.
+        
+        Args:
+            x: Input tensor of shape [B, N, embed_dim]
+            
+        Returns:
+            Output tensor of same shape
+        """
+        # Self-attention
         x_norm = self.norm1(x)
         attn_out, _ = self.attn(x_norm, x_norm, x_norm)
         x = x + attn_out
         
-        # MLP with residual
+        # MLP
         x = x + self.mlp(self.norm2(x))
+        
+        return x
+
+
+class VisionTransformerEncoder(nn.Module):
+    """
+    Vision Transformer encoder for processing video tokens.
+    """
+    
+    def __init__(
+        self,
+        embed_dim: int,
+        depth: int,
+        num_heads: int,
+        mlp_ratio: float = 4.0,
+        qkv_bias: bool = True,
+        drop_rate: float = 0.0,
+        attn_drop_rate: float = 0.0
+    ):
+        """
+        Initialize ViT encoder.
+        
+        Args:
+            embed_dim: Embedding dimension
+            depth: Number of transformer blocks
+            num_heads: Number of attention heads
+            mlp_ratio: Ratio of MLP hidden dim to embed_dim
+            qkv_bias: Whether to use bias in QKV projection
+            drop_rate: Dropout rate
+            attn_drop_rate: Attention dropout rate
+        """
+        super().__init__()
+        self.blocks = nn.ModuleList([
+            TransformerBlock(
+                embed_dim,
+                num_heads,
+                mlp_ratio,
+                qkv_bias,
+                drop_rate,
+                attn_drop_rate
+            )
+            for _ in range(depth)
+        ])
+        self.norm = nn.LayerNorm(embed_dim)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass through encoder.
+        
+        Args:
+            x: Input tokens of shape [B, N, embed_dim]
+            
+        Returns:
+            Encoded tokens of same shape
+        """
+        for block in self.blocks:
+            x = block(x)
+        x = self.norm(x)
+        return x
+
+
+class VideoMAEDecoder(nn.Module):
+    """
+    Decoder for reconstructing masked patches.
+    """
+    
+    def __init__(
+        self,
+        embed_dim: int,
+        decoder_embed_dim: int = 512,
+        decoder_depth: int = 8,
+        decoder_num_heads: int = 16,
+        mlp_ratio: float = 4.0,
+        patch_size: int = 16,
+        num_patches: int = 196
+    ):
+        """
+        Initialize decoder.
+        
+        Args:
+            embed_dim: Encoder embedding dimension
+            decoder_embed_dim: Decoder embedding dimension
+            decoder_depth: Number of decoder transformer blocks
+            decoder_num_heads: Number of decoder attention heads
+            mlp_ratio: Ratio of MLP hidden dim to embed_dim
+            patch_size: Size of each patch
+            num_patches: Number of spatial patches per frame
+        """
+        super().__init__()
+        self.decoder_embed = nn.Linear(embed_dim, decoder_embed_dim, bias=True)
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
+        
+        # Decoder positional embedding
+        self.decoder_pos_embed = nn.Parameter(
+            torch.zeros(1, num_patches, decoder_embed_dim)
+        )
+        
+        # Decoder blocks
+        self.decoder_blocks = nn.ModuleList([
+            TransformerBlock(
+                decoder_embed_dim,
+                decoder_num_heads,
+                mlp_ratio,
+                qkv_bias=True,
+                drop_rate=0.0,
+                attn_drop_rate=0.0
+            )
+            for _ in range(decoder_depth)
+        ])
+        self.decoder_norm = nn.LayerNorm(decoder_embed_dim)
+        
+        # Prediction head: reconstruct pixel values
+        self.decoder_pred = nn.Linear(
+            decoder_embed_dim,
+            patch_size * patch_size * 3,  # RGB values for each patch
+            bias=True
+        )
+    
+    def forward(
+        self,
+        x: torch.Tensor,
+        ids_restore: torch.Tensor,
+        num_patches: int
+    ) -> torch.Tensor:
+        """
+        Forward pass through decoder.
+        
+        Args:
+            x: Visible tokens from encoder [B, num_keep, embed_dim]
+            ids_restore: Indices to restore original token order [B, num_tokens]
+            num_patches: Number of spatial patches per frame
+            
+        Returns:
+            Reconstructed patches [B, num_tokens, patch_size*patch_size*3]
+        """
+        B = x.shape[0]
+        
+        # Project to decoder dimension
+        x = self.decoder_embed(x)  # [B, num_keep, decoder_embed_dim]
+        
+        # Append mask tokens
+        mask_tokens = self.mask_token.repeat(B, ids_restore.shape[1] - x.shape[1], 1)
+        x = torch.cat([x, mask_tokens], dim=1)  # [B, num_tokens, decoder_embed_dim]
+        
+        # Restore original token order
+        x = torch.gather(
+            x,
+            dim=1,
+            index=ids_restore.unsqueeze(-1).expand(-1, -1, x.shape[-1])
+        )
+        
+        # Add positional embedding
+        # Reshape to separate temporal dimension if needed
+        T = ids_restore.shape[1] // num_patches
+        x = x.view(B, T, num_patches, -1)
+        x = x + self.decoder_pos_embed.unsqueeze(1)  # [B, T, num_patches, decoder_embed_dim]
+        x = x.view(B, T * num_patches, -1)
+        
+        # Apply decoder blocks
+        for block in self.decoder_blocks:
+            x = block(x)
+        x = self.decoder_norm(x)
+        
+        # Predict pixel values
+        x = self.decoder_pred(x)  # [B, num_tokens, patch_size*patch_size*3]
         
         return x
 
 
 class VideoMAE(nn.Module):
     """
-    VideoMAE model with ViT backbone.
+    VideoMAE model with EVEREST masking.
     
-    Implements a masked video autoencoder using Vision Transformer architecture.
-    Supports ViT-S, ViT-B, and ViT-L backbones.
-    
-    Args:
-        backbone (str): Backbone architecture. Options: "vit_s", "vit_b", "vit_l".
-        img_size (int): Spatial size of input frames. Default: 224.
-        patch_size (int): Size of spatial patches. Default: 16.
-        tubelet_size (int): Size of temporal tubelets. Default: 2.
-        num_frames (int): Number of input frames. Default: 16.
-        mask_ratio (float): Ratio of patches to mask during training. Default: 0.75.
-        pretrained (bool): Whether to use pretrained weights. Default: False.
-        pretrained_path (str, optional): Path to pretrained checkpoint.
+    Architecture:
+    1. Patch embedding
+    2. Temporal and positional embeddings
+    3. EVEREST masking
+    4. ViT encoder (processes visible tokens only)
+    5. Decoder (reconstructs all tokens)
     """
-    
-    # ViT architecture configurations
-    BACKBONE_CONFIGS = {
-        "vit_s": {
-            "embed_dim": 384,
-            "depth": 12,
-            "num_heads": 6,
-            "mlp_ratio": 4.0,
-        },
-        "vit_b": {
-            "embed_dim": 768,
-            "depth": 12,
-            "num_heads": 12,
-            "mlp_ratio": 4.0,
-        },
-        "vit_l": {
-            "embed_dim": 1024,
-            "depth": 24,
-            "num_heads": 16,
-            "mlp_ratio": 4.0,
-        },
-    }
     
     def __init__(
         self,
-        backbone: str = "vit_s",
         img_size: int = 224,
         patch_size: int = 16,
-        tubelet_size: int = 2,
         num_frames: int = 16,
+        backbone: str = 'ViT-S',
         mask_ratio: float = 0.75,
-        pretrained: bool = False,
-        pretrained_path: Optional[str] = None,
+        pretrained_weights: Optional[str] = None
     ):
+        """
+        Initialize VideoMAE model.
+        
+        Args:
+            img_size: Size of input image (assumed square)
+            patch_size: Size of each patch
+            num_frames: Number of frames in video sequence
+            backbone: Backbone architecture ('ViT-S', 'ViT-B', or 'ViT-L')
+            mask_ratio: Ratio of tokens to mask
+            pretrained_weights: Path to pretrained weights checkpoint (optional)
+        """
         super().__init__()
         
-        if backbone not in self.BACKBONE_CONFIGS:
-            raise ValueError(
-                f"Invalid backbone '{backbone}'. "
-                f"Must be one of {list(self.BACKBONE_CONFIGS.keys())}"
-            )
+        # Backbone configuration
+        backbone_configs = {
+            'ViT-S': {
+                'embed_dim': 384,
+                'depth': 12,
+                'num_heads': 6,
+                'mlp_ratio': 4.0
+            },
+            'ViT-B': {
+                'embed_dim': 768,
+                'depth': 12,
+                'num_heads': 12,
+                'mlp_ratio': 4.0
+            },
+            'ViT-L': {
+                'embed_dim': 1024,
+                'depth': 24,
+                'num_heads': 16,
+                'mlp_ratio': 4.0
+            }
+        }
         
-        self.backbone = backbone
+        if backbone not in backbone_configs:
+            raise ValueError(f"Unknown backbone: {backbone}. Choose from {list(backbone_configs.keys())}")
+        
+        config = backbone_configs[backbone]
+        self.embed_dim = config['embed_dim']
+        self.depth = config['depth']
+        self.num_heads = config['num_heads']
+        self.mlp_ratio = config['mlp_ratio']
+        
+        # Model parameters
         self.img_size = img_size
         self.patch_size = patch_size
-        self.tubelet_size = tubelet_size
         self.num_frames = num_frames
-        self.mask_ratio = mask_ratio
-        
-        # Get backbone configuration
-        config = self.BACKBONE_CONFIGS[backbone]
-        self.embed_dim = config["embed_dim"]
-        self.depth = config["depth"]
-        self.num_heads = config["num_heads"]
-        self.mlp_ratio = config["mlp_ratio"]
-        
-        # Calculate number of patches
-        self.num_patches_per_frame = (img_size // patch_size) ** 2
-        self.num_temporal_patches = num_frames // tubelet_size
-        self.num_patches = self.num_patches_per_frame * self.num_temporal_patches
+        self.num_patches = (img_size // patch_size) ** 2
+        self.num_tokens = num_frames * self.num_patches
         
         # Patch embedding
-        self.patch_embed = PatchEmbedding3D(
-            img_size=img_size,
-            patch_size=patch_size,
-            tubelet_size=tubelet_size,
-            in_channels=3,
-            embed_dim=self.embed_dim,
-        )
+        self.patch_embed = PatchEmbed(img_size, patch_size, 3, self.embed_dim)
         
-        # Learnable class token (for compatibility with standard ViT)
+        # Positional and temporal embeddings
+        self.pos_embed = PositionalEncoding(self.num_patches, self.embed_dim)
+        self.temp_embed = TemporalEmbedding(num_frames, self.embed_dim)
+        
+        # Class token (optional, for classification tasks)
         self.cls_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
         
-        # Positional encoding
-        self.pos_embed = nn.Parameter(
-            torch.zeros(1, self.num_patches + 1, self.embed_dim)
-        )  # +1 for cls token
-        
-        # Transformer blocks
-        self.blocks = nn.ModuleList([
-            TransformerBlock(
-                embed_dim=self.embed_dim,
-                num_heads=self.num_heads,
-                mlp_ratio=self.mlp_ratio,
-            )
-            for _ in range(self.depth)
-        ])
-        
-        # Final layer norm
-        self.norm = nn.LayerNorm(self.embed_dim)
-        
-        # Decoder for reconstruction (used in EVEREST training)
-        decoder_embed_dim = self.embed_dim
-        decoder_depth = 4
-        decoder_num_heads = self.num_heads
-        
-        self.decoder_embed = nn.Linear(self.embed_dim, decoder_embed_dim)
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
-        self.decoder_pos_embed = nn.Parameter(
-            torch.zeros(1, self.num_patches + 1, decoder_embed_dim)
+        # Encoder
+        self.encoder = VisionTransformerEncoder(
+            self.embed_dim,
+            self.depth,
+            self.num_heads,
+            self.mlp_ratio
         )
         
-        self.decoder_blocks = nn.ModuleList([
-            TransformerBlock(
-                embed_dim=decoder_embed_dim,
-                num_heads=decoder_num_heads,
-                mlp_ratio=self.mlp_ratio,
-            )
-            for _ in range(decoder_depth)
-        ])
+        # Decoder
+        decoder_embed_dim = 512
+        decoder_depth = 8
+        decoder_num_heads = 16
+        self.decoder = VideoMAEDecoder(
+            self.embed_dim,
+            decoder_embed_dim,
+            decoder_depth,
+            decoder_num_heads,
+            self.mlp_ratio,
+            patch_size,
+            self.num_patches
+        )
         
-        self.decoder_norm = nn.LayerNorm(decoder_embed_dim)
-        
-        # Reconstruction head: predict pixel values for each patch
-        patch_pixels = patch_size * patch_size * tubelet_size * 3
-        self.decoder_pred = nn.Linear(decoder_embed_dim, patch_pixels)
+        # EVEREST masking generator
+        self.masking_generator = EverestMaskingGenerator(
+            input_size=(num_frames, img_size, img_size),
+            patch_size=patch_size,
+            mask_ratio=mask_ratio
+        )
         
         # Initialize weights
         self._init_weights()
         
-        # Load pretrained weights if specified
-        if pretrained:
-            if pretrained_path is not None:
-                self.load_pretrained(pretrained_path)
-            else:
-                print("Warning: pretrained=True but no pretrained_path provided. "
-                      "Using random initialization.")
+        # Load pretrained weights if provided
+        if pretrained_weights is not None:
+            self.load_pretrained(pretrained_weights)
     
     def _init_weights(self):
         """Initialize model weights."""
         # Initialize patch embedding
-        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+        nn.init.trunc_normal_(self.patch_embed.proj.weight, std=0.02)
+        nn.init.constant_(self.patch_embed.proj.bias, 0)
+        
+        # Initialize positional embeddings
+        nn.init.trunc_normal_(self.pos_embed.pos_embed, std=0.02)
+        nn.init.trunc_normal_(self.temp_embed.temp_embed, std=0.02)
+        
+        # Initialize class token
         nn.init.trunc_normal_(self.cls_token, std=0.02)
         
-        # Initialize decoder
-        nn.init.trunc_normal_(self.decoder_pos_embed, std=0.02)
-        nn.init.trunc_normal_(self.mask_token, std=0.02)
-        
-        # Initialize transformer blocks
-        for block in self.blocks:
-            nn.init.constant_(block.norm1.weight, 1.0)
-            nn.init.constant_(block.norm1.bias, 0.0)
-            nn.init.constant_(block.norm2.weight, 1.0)
-            nn.init.constant_(block.norm2.bias, 0.0)
-        
-        # Initialize decoder blocks
-        for block in self.decoder_blocks:
-            nn.init.constant_(block.norm1.weight, 1.0)
-            nn.init.constant_(block.norm1.bias, 0.0)
-            nn.init.constant_(block.norm2.weight, 1.0)
-            nn.init.constant_(block.norm2.bias, 0.0)
+        # Initialize decoder mask token
+        nn.init.trunc_normal_(self.decoder.mask_token, std=0.02)
+        nn.init.trunc_normal_(self.decoder.decoder_pos_embed, std=0.02)
     
     def load_pretrained(self, checkpoint_path: str):
-        """Load pretrained weights from checkpoint."""
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        """
+        Load pretrained weights from checkpoint.
+        
+        Args:
+            checkpoint_path: Path to checkpoint file
+        """
+        if not torch.cuda.is_available():
+            checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        else:
+            checkpoint = torch.load(checkpoint_path)
         
         # Handle different checkpoint formats
-        if "state_dict" in checkpoint:
-            state_dict = checkpoint["state_dict"]
-        elif "model" in checkpoint:
-            state_dict = checkpoint["model"]
+        if isinstance(checkpoint, dict):
+            if 'state_dict' in checkpoint:
+                state_dict = checkpoint['state_dict']
+            elif 'model' in checkpoint:
+                state_dict = checkpoint['model']
+            else:
+                state_dict = checkpoint
         else:
             state_dict = checkpoint
         
         # Remove 'module.' prefix if present (from DataParallel/DistributedDataParallel)
-        state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
+        state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
         
-        # Load state dict (strict=False to allow partial loading)
+        # Load state dict
         missing_keys, unexpected_keys = self.load_state_dict(state_dict, strict=False)
         
         if missing_keys:
-            print(f"Warning: Missing keys when loading pretrained weights: {missing_keys}")
+            print(f"Warning: Missing keys in checkpoint: {missing_keys}")
         if unexpected_keys:
-            print(f"Warning: Unexpected keys when loading pretrained weights: {unexpected_keys}")
+            print(f"Warning: Unexpected keys in checkpoint: {unexpected_keys}")
     
-    def random_masking(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        return_mask: bool = False
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
-        Randomly mask patches for EVEREST training.
+        Forward pass through VideoMAE.
         
         Args:
-            x: Input patch embeddings of shape (B, N, embed_dim)
+            x: Input video tensor of shape [B, T, C, H, W]
+            return_mask: Whether to return the mask
             
         Returns:
-            x_masked: Masked embeddings with mask tokens
-            mask: Binary mask (1 for visible, 0 for masked)
-            ids_restore: Indices to restore original order
+            Tuple of (reconstructed_patches, mask) if return_mask=True,
+            else just reconstructed_patches
         """
-        B, N, D = x.shape
-        len_keep = int(N * (1 - self.mask_ratio))
+        B, T, C, H, W = x.shape
         
-        # Generate random noise and sort
-        noise = torch.rand(B, N, device=x.device)
-        ids_shuffle = torch.argsort(noise, dim=1)
-        ids_restore = torch.argsort(ids_shuffle, dim=1)
+        # Generate EVEREST mask from original video (for motion computation)
+        mask = self.masking_generator.generate_mask(x)  # [B, num_tokens]
         
-        # Keep first len_keep patches
-        ids_keep = ids_shuffle[:, :len_keep]
-        x_keep = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).expand(-1, -1, D))
+        # Patch embedding
+        x = self.patch_embed(x)  # [B, T*num_patches, embed_dim]
         
-        # Generate mask tokens for masked patches
-        mask_tokens = self.mask_token.expand(B, N - len_keep, -1)
-        x_masked = torch.cat([x_keep, mask_tokens], dim=1)
+        # Add positional and temporal embeddings
+        x = self.pos_embed(x)
+        x = self.temp_embed(x, self.num_patches)
         
-        # Create binary mask (1 for visible, 0 for masked)
-        mask = torch.zeros(B, N, device=x.device)
-        mask[:, :len_keep] = 1
-        mask = torch.gather(mask, dim=1, index=ids_restore)
+        # Apply mask: separate visible tokens
+        visible_tokens, ids_restore = self.masking_generator.apply_mask(x, mask)
         
-        # Restore original order
-        ids_restore_expanded = ids_restore.unsqueeze(-1).expand(-1, -1, D)
-        x_masked = torch.gather(x_masked, dim=1, index=ids_restore_expanded)
+        # Encoder: process only visible tokens
+        encoded_tokens = self.encoder(visible_tokens)  # [B, num_keep, embed_dim]
         
-        return x_masked, mask, ids_restore
-    
-    def forward_encoder(self, x: torch.Tensor, mask_ratio: float = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Forward pass through encoder.
+        # Decoder: reconstruct all tokens
+        reconstructed = self.decoder(encoded_tokens, ids_restore, self.num_patches)
+        # [B, num_tokens, patch_size*patch_size*3]
         
-        Args:
-            x: Input video tensor of shape (B, T, C, H, W)
-            mask_ratio: Override default mask ratio
-            
-        Returns:
-            latent: Encoded features
-            mask: Binary mask
-            ids_restore: Indices to restore original order
-        """
-        if mask_ratio is None:
-            mask_ratio = self.mask_ratio
-        
-        # Extract patches
-        x = self.patch_embed(x)  # (B, N, embed_dim)
-        
-        # Add class token
-        cls_token = self.cls_token.expand(x.shape[0], -1, -1)
-        x = torch.cat([cls_token, x], dim=1)
-        
-        # Add positional encoding
-        x = x + self.pos_embed
-        
-        # Random masking
-        x_masked, mask, ids_restore = self.random_masking(x[:, 1:])  # Remove cls token for masking
-        cls_token = x[:, :1]  # Keep cls token
-        x_masked = torch.cat([cls_token, x_masked], dim=1)
-        
-        # Apply transformer blocks
-        for block in self.blocks:
-            x_masked = block(x_masked)
-        
-        x_masked = self.norm(x_masked)
-        
-        return x_masked, mask, ids_restore
-    
-    def forward_decoder(self, x: torch.Tensor, ids_restore: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass through decoder.
-        
-        Args:
-            x: Encoded features from encoder
-            ids_restore: Indices to restore original patch order
-            
-        Returns:
-            Reconstructed patch predictions
-        """
-        # Decoder embedding
-        x = self.decoder_embed(x)
-        
-        # Remove cls token and restore patch order
-        cls_token = x[:, :1]
-        x_patches = x[:, 1:]
-        B, N, D = x_patches.shape
-        
-        # Restore original order
-        ids_restore_expanded = ids_restore.unsqueeze(-1).expand(-1, -1, D)
-        x_patches = torch.gather(x_patches, dim=1, index=ids_restore_expanded)
-        
-        # Add cls token back
-        x = torch.cat([cls_token, x_patches], dim=1)
-        
-        # Add decoder positional encoding
-        x = x + self.decoder_pos_embed
-        
-        # Apply decoder transformer blocks
-        for block in self.decoder_blocks:
-            x = block(x)
-        
-        x = self.decoder_norm(x)
-        
-        # Prediction head (remove cls token)
-        x = x[:, 1:]
-        x = self.decoder_pred(x)
-        
-        return x
-    
-    def forward(self, x: torch.Tensor, mask_ratio: float = None) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Forward pass.
-        
-        Args:
-            x: Input video tensor of shape (B, T, C, H, W)
-            mask_ratio: Override default mask ratio
-            
-        Returns:
-            pred: Reconstructed patch predictions
-            mask: Binary mask (1 for visible, 0 for masked)
-        """
-        # Encoder
-        latent, mask, ids_restore = self.forward_encoder(x, mask_ratio)
-        
-        # Decoder
-        pred = self.forward_decoder(latent, ids_restore)
-        
-        return pred, mask
+        if return_mask:
+            return reconstructed, mask
+        return reconstructed
 

@@ -1,8 +1,2 @@
-"""
-Model definitions for VideoMAE training.
-"""
-
-from .videomae import VideoMAE
-
-__all__ = ["VideoMAE"]
+"""Model architectures for VideoMAE with EVEREST masking."""
 
