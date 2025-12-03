@@ -10,3 +10,4 @@ pytorch-lightning>=2.0.0
 pyyaml
 schedulefree
 torchvision
+numpy==1.26.4

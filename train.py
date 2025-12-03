@@ -227,13 +227,14 @@ def main():
         enable_progress_bar=True,
         enable_model_summary=True,
         precision='16-mixed' if torch.cuda.is_available() else '32',  # Use mixed precision on GPU
-        gradient_clip_val=config.get('training', {}).get('gradient_clip_val', None),
-        resume_from_checkpoint=args.resume if args.resume else None
+        gradient_clip_val=config.get('training', {}).get('gradient_clip_val', None)
     )
     
     # Start training
     print("Starting training...")
-    trainer.fit(model, train_loader, val_loader)
+    # Pass checkpoint path to fit() method instead of Trainer constructor
+    # This is the correct way in newer PyTorch Lightning versions
+    trainer.fit(model, train_loader, val_loader, ckpt_path=args.resume if args.resume else None)
     
     print("Training completed!")
     print(f"Best model checkpoint: {checkpoint_callback.best_model_path}")
