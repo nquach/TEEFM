@@ -293,14 +293,49 @@ class VideoMAELightningModule(pl.LightningModule):
         Returns:
             torch.optim.Optimizer: Configured optimizer
         """
+        # Ensure lr is a float (YAML might parse it as a list in some cases)
+        lr = self.optimizer_config.get('lr', 1.5e-4)
+        if isinstance(lr, (list, tuple)):
+            lr = float(lr[0]) if len(lr) > 0 else 1.5e-4
+        else:
+            lr = float(lr)
+        
+        # Ensure weight_decay is a float
+        weight_decay = self.optimizer_config.get('weight_decay', 0.05)
+        if isinstance(weight_decay, (list, tuple)):
+            weight_decay = float(weight_decay[0]) if len(weight_decay) > 0 else 0.05
+        else:
+            weight_decay = float(weight_decay)
+        
+        # Ensure eps is a float
+        eps = self.optimizer_config.get('eps', 1e-8)
+        if isinstance(eps, (list, tuple)):
+            eps = float(eps[0]) if len(eps) > 0 else 1e-8
+        else:
+            eps = float(eps)
+        
+        # Ensure warmup_steps is an int
+        warmup_steps = self.optimizer_config.get('warmup_steps', 0)
+        if isinstance(warmup_steps, (list, tuple)):
+            warmup_steps = int(warmup_steps[0]) if len(warmup_steps) > 0 else 0
+        else:
+            warmup_steps = int(warmup_steps)
+        
+        # Ensure betas is a tuple of floats
+        betas = self.optimizer_config.get('betas', [0.9, 0.95])
+        if isinstance(betas, (list, tuple)):
+            betas = tuple(float(b) for b in betas)
+        else:
+            betas = (0.9, 0.95)
+        
         optimizer = create_schedule_free_optimizer(
             self.model,
             optimizer_type=self.optimizer_config.get('type', 'adamw'),
-            lr=self.optimizer_config.get('lr', 1.5e-4),
-            weight_decay=self.optimizer_config.get('weight_decay', 0.05),
-            betas=tuple(self.optimizer_config.get('betas', [0.9, 0.95])),
-            eps=self.optimizer_config.get('eps', 1e-8),
-            warmup_steps=self.optimizer_config.get('warmup_steps', 0)
+            lr=lr,
+            weight_decay=weight_decay,
+            betas=betas,
+            eps=eps,
+            warmup_steps=warmup_steps
         )
         
         # Store optimizer reference for train/eval mode switching
