@@ -57,13 +57,15 @@ training:
   # Number of consecutive frames to sample before downsampling
   frames_to_sample: 32
 
-# Optimizer configuration (AdamWScheduleFree)
+# Optimizer configuration (Schedule-Free Optimizers)
 optimizer:
+  # Optimizer type: "adamw" (AdamWScheduleFree) or "radam" (RAdamScheduleFree)
+  type: "adamw"
   # Learning rate
   lr: 1.5e-4
   # Weight decay
   weight_decay: 0.05
-  # Beta parameters for Adam optimizer
+  # Beta parameters for Adam-based optimizers
   betas: [0.9, 0.95]
   # Epsilon for numerical stability
   eps: 1e-8

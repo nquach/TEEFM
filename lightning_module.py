@@ -71,6 +71,9 @@ class VideoMAELightningModule(pl.LightningModule):
         
         # Window size for masking (will be set in setup)
         self.window_size = None
+        
+        # Store optimizer reference for train/eval mode switching (required for schedule-free optimizers)
+        self._optimizer = None
     
     def setup(self, stage=None):
         """
@@ -102,6 +105,18 @@ class VideoMAELightningModule(pl.LightningModule):
             tuple: (output, masks) where output is the reconstruction and masks contains mask info
         """
         return self.model(x, mask)
+    
+    def on_train_start(self):
+        """Called at the beginning of training."""
+        # Set optimizer to training mode (required for schedule-free optimizers)
+        if self._optimizer is not None and hasattr(self._optimizer, 'train'):
+            self._optimizer.train()
+    
+    def on_validation_start(self):
+        """Called at the beginning of validation."""
+        # Set optimizer to evaluation mode (required for schedule-free optimizers)
+        if self._optimizer is not None and hasattr(self._optimizer, 'eval'):
+            self._optimizer.eval()
     
     def training_step(self, batch, batch_idx):
         """
@@ -280,11 +295,15 @@ class VideoMAELightningModule(pl.LightningModule):
         """
         optimizer = create_schedule_free_optimizer(
             self.model,
+            optimizer_type=self.optimizer_config.get('type', 'adamw'),
             lr=self.optimizer_config.get('lr', 1.5e-4),
             weight_decay=self.optimizer_config.get('weight_decay', 0.05),
             betas=tuple(self.optimizer_config.get('betas', [0.9, 0.95])),
             eps=self.optimizer_config.get('eps', 1e-8)
         )
+        
+        # Store optimizer reference for train/eval mode switching
+        self._optimizer = optimizer
         
         return optimizer
 
