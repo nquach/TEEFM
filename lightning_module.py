@@ -299,7 +299,8 @@ class VideoMAELightningModule(pl.LightningModule):
             lr=self.optimizer_config.get('lr', 1.5e-4),
             weight_decay=self.optimizer_config.get('weight_decay', 0.05),
             betas=tuple(self.optimizer_config.get('betas', [0.9, 0.95])),
-            eps=self.optimizer_config.get('eps', 1e-8)
+            eps=self.optimizer_config.get('eps', 1e-8),
+            warmup_steps=self.optimizer_config.get('warmup_steps', 0)
         )
         
         # Store optimizer reference for train/eval mode switching

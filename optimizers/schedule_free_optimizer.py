@@ -24,7 +24,8 @@ def create_schedule_free_optimizer(
     lr=1.5e-4,
     weight_decay=0.05,
     betas=(0.9, 0.95),
-    eps=1e-8
+    eps=1e-8,
+    warmup_steps=0
 ):
     """
     Create a schedule-free optimizer for the model.
@@ -33,7 +34,7 @@ def create_schedule_free_optimizer(
     by using a schedule-free approach. This simplifies training configuration.
     
     Supported optimizers:
-    - 'adamw': AdamWScheduleFree (default)
+    - 'adamw': AdamWScheduleFree (default) - supports warmup_steps
     - 'radam': RAdamScheduleFree
     
     Args:
@@ -44,19 +45,25 @@ def create_schedule_free_optimizer(
         betas (tuple): Beta parameters for Adam-based optimizers (default: (0.9, 0.95))
                       Note: RAdam may use different default betas
         eps (float): Epsilon for numerical stability (default: 1e-8)
+        warmup_steps (int): Number of warmup steps for AdamWScheduleFree (default: 0).
+                           Only applies to 'adamw' optimizer type. Set to 0 to disable warmup.
     
     Returns:
         torch.optim.Optimizer: Schedule-free optimizer instance
     
     Raises:
         ImportError: If schedule-free package is not installed
-        ValueError: If optimizer_type is not supported
+        ValueError: If optimizer_type is not supported or warmup_steps is invalid
     """
     if not SCHEDULE_FREE_AVAILABLE:
         raise ImportError(
             "schedule-free package is required but not installed. "
             "Install with: pip install schedule-free"
         )
+    
+    # Validate warmup_steps
+    if warmup_steps < 0:
+        raise ValueError(f"warmup_steps must be non-negative, got {warmup_steps}")
     
     # Get model parameters
     parameters = model.parameters()
@@ -66,14 +73,22 @@ def create_schedule_free_optimizer(
     
     # Create optimizer based on type
     if optimizer_type == 'adamw':
+        # AdamWScheduleFree supports warmup_steps parameter
         optimizer = AdamWScheduleFree(
             parameters,
             lr=lr,
             weight_decay=weight_decay,
             betas=betas,
-            eps=eps
+            eps=eps,
+            warmup_steps=warmup_steps
         )
+        if warmup_steps > 0:
+            print(f"AdamWScheduleFree initialized with {warmup_steps} warmup steps")
     elif optimizer_type == 'radam':
+        # RAdamScheduleFree doesn't support warmup_steps, so we ignore it
+        if warmup_steps > 0:
+            print(f"Warning: warmup_steps={warmup_steps} specified but RAdamScheduleFree "
+                  "does not support warmup. Ignoring warmup_steps parameter.")
         optimizer = RAdamScheduleFree(
             parameters,
             lr=lr,

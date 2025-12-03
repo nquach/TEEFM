@@ -69,6 +69,9 @@ optimizer:
   betas: [0.9, 0.95]
   # Epsilon for numerical stability
   eps: 1e-8
+  # Warmup steps for AdamWScheduleFree (only applies when type is "adamw")
+  # Set to 0 to disable warmup. Warmup helps stabilize training in initial phases.
+  warmup_steps: 0
 
 # Checkpoint configuration
 checkpoint:
