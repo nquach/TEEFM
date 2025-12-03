@@ -8,5 +8,5 @@ scipy
 pandas
 pytorch-lightning>=2.0.0
 pyyaml
-schedule-free
+schedulefree
 torchvision
