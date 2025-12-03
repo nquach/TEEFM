@@ -98,29 +98,21 @@ class CustomVideoDataset(Dataset):
         # Load video using torchvision
         # Returns: (video_tensor, audio_tensor, info_dict)
         # video_tensor shape: [T, H, W, C] where T is number of frames
-        max_retries = 0
-        retry_count = 3
         video = None
-        
-        while retry_count < max_retries:
+        while video == None:
             try:
                 video, _, info = read_video(video_path, pts_unit='sec')
                 # Check if video is empty or has invalid shape
                 if video is None or video.numel() == 0 or len(video.shape) < 4:
                     raise ValueError(f"Video {video_path} is empty or has invalid shape")
-                break
+                
             except Exception as e:
-                retry_count += 1
-                if retry_count >= max_retries:
-                    warnings.warn(f"Error loading video {video_path} after {max_retries} attempts: {e}. Using random index.")
-                    # Fallback to a random video if loading fails
-                    idx = random.randint(0, len(self.video_paths) - 1)
-                    video_path = self.video_paths[idx]
-                    retry_count = 0
-                else:
-                    warnings.warn(f"Error loading video {video_path} (attempt {retry_count}/{max_retries}): {e}. Retrying...")
-        
-        # Final check: ensure video is valid
+                warnings.warn(f"Error loading video {video_path}. Using random index.")
+                # Fallback to a random video if loading fails
+                idx = random.randint(0, len(self.video_paths) - 1)
+                video_path = self.video_paths[idx]
+                video, _, info = read_video(video_path, pts_unit='sec')
+                
         if video is None or video.numel() == 0:
             raise RuntimeError(f"Failed to load valid video after {max_retries} attempts")
         
