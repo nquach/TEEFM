@@ -187,33 +187,47 @@ def main():
     print(f"Total parameters: {total_params / 1e6:.2f}M")
     print(f"Trainable parameters: {trainable_params / 1e6:.2f}M")
     
-    # Setup checkpoint callback
+    # Setup checkpoint callback (if enabled)
     checkpoint_config = config['checkpoint']
-    checkpoint_dir = checkpoint_config['dir']
-    checkpoint_prefix = checkpoint_config['prefix']
+    checkpoint_enabled = checkpoint_config.get('enable', True)
     
-    # Create checkpoint directory
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    
-    checkpoint_callback = ModelCheckpoint(
-        dirpath=checkpoint_dir,
-        filename=f"{checkpoint_prefix}-{{epoch:02d}}-{{val_loss:.4f}}",
-        monitor=checkpoint_config.get('monitor', 'val_loss'),
-        mode='min',  # Minimize validation loss
-        save_top_k=checkpoint_config.get('save_top_k', 3),
-        save_last=True,  # Always save last checkpoint
-        verbose=True
-    )
+    checkpoint_callback = None
+    if checkpoint_enabled:
+        checkpoint_dir = checkpoint_config['dir']
+        checkpoint_prefix = checkpoint_config['prefix']
+        
+        # Create checkpoint directory
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        checkpoint_callback = ModelCheckpoint(
+            dirpath=checkpoint_dir,
+            filename=f"{checkpoint_prefix}-{{epoch:02d}}-{{val_loss:.4f}}",
+            monitor=checkpoint_config.get('monitor', 'val_loss'),
+            mode='min',  # Minimize validation loss
+            save_top_k=checkpoint_config.get('save_top_k', 3),
+            save_last=True,  # Always save last checkpoint
+            verbose=True
+        )
+        print(f"Checkpoint saving enabled. Checkpoints will be saved to: {checkpoint_dir}")
+    else:
+        print("Checkpoint saving disabled. No model weights will be saved.")
     
     # Setup logging
     logging_config = config.get('logging', {})
     log_dir = logging_config.get('log_dir', 'output/logs')
     os.makedirs(log_dir, exist_ok=True)
     
+    # Use checkpoint prefix for logger name, or default name if checkpointing is disabled
+    logger_name = checkpoint_config.get('prefix', 'videomae') if checkpoint_enabled else 'videomae'
     logger = TensorBoardLogger(
         save_dir=log_dir,
-        name=checkpoint_prefix
+        name=logger_name
     )
+    
+    # Prepare callbacks list (only include checkpoint callback if enabled)
+    callbacks_list = []
+    if checkpoint_callback is not None:
+        callbacks_list.append(checkpoint_callback)
     
     # Create trainer
     trainer = pl.Trainer(
@@ -221,14 +235,13 @@ def main():
         accelerator='gpu' if torch.cuda.is_available() else 'cpu',
         devices='auto',  # Use all available GPUs
         strategy='ddp' if torch.cuda.device_count() > 1 else 'auto',
-        callbacks=[checkpoint_callback],
+        callbacks=callbacks_list if callbacks_list else None,
         logger=logger,
         log_every_n_steps=logging_config.get('log_freq', 10),
         enable_progress_bar=True,
         enable_model_summary=True,
         precision='16-mixed' if torch.cuda.is_available() else '32',  # Use mixed precision on GPU
-        gradient_clip_val=config.get('training', {}).get('gradient_clip_val', None),
-        profiler='advanced'
+        gradient_clip_val=config.get('training', {}).get('gradient_clip_val', None)
     )
     
     # Start training
@@ -238,7 +251,10 @@ def main():
     trainer.fit(model, train_loader, val_loader, ckpt_path=args.resume if args.resume else None)
     
     print("Training completed!")
-    print(f"Best model checkpoint: {checkpoint_callback.best_model_path}")
+    if checkpoint_callback is not None:
+        print(f"Best model checkpoint: {checkpoint_callback.best_model_path}")
+    else:
+        print("No checkpoints were saved (checkpoint saving is disabled).")
 
 
 if __name__ == '__main__':

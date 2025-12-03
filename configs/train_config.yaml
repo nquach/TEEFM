@@ -75,6 +75,8 @@ optimizer:
 
 # Checkpoint configuration
 checkpoint:
+  # Whether to save model checkpoints (set to false to disable checkpointing)
+  enable: true
   # Directory to save checkpoints
   dir: "output/checkpoints"
   # Prefix for checkpoint filenames
