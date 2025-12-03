@@ -227,7 +227,8 @@ def main():
         enable_progress_bar=True,
         enable_model_summary=True,
         precision='16-mixed' if torch.cuda.is_available() else '32',  # Use mixed precision on GPU
-        gradient_clip_val=config.get('training', {}).get('gradient_clip_val', None)
+        gradient_clip_val=config.get('training', {}).get('gradient_clip_val', None),
+        profiler='advanced'
     )
     
     # Start training

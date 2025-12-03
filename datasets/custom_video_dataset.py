@@ -98,7 +98,7 @@ class CustomVideoDataset(Dataset):
         # Load video using torchvision
         # Returns: (video_tensor, audio_tensor, info_dict)
         # video_tensor shape: [T, H, W, C] where T is number of frames
-        max_retries = 3
+        max_retries = 0
         retry_count = 0
         video = None
         
