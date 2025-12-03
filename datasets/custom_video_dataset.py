@@ -99,7 +99,7 @@ class CustomVideoDataset(Dataset):
         # Returns: (video_tensor, audio_tensor, info_dict)
         # video_tensor shape: [T, H, W, C] where T is number of frames
         max_retries = 0
-        retry_count = 1
+        retry_count = 3
         video = None
         
         while retry_count < max_retries:
