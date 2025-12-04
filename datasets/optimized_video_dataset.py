@@ -1,7 +1,7 @@
 """
-Optimized Video Dataset using LitData StreamDataset
+Optimized Video Dataset using LitData StreamingDataset
 
-This module provides a wrapper around litdata's StreamDataset for loading
+This module provides a wrapper around litdata's StreamingDataset for loading
 optimized video datasets created with litdata.optimize().
 """
 
@@ -9,13 +9,13 @@ import os
 import random
 import warnings
 import torch
-from litdata import StreamDataset, StreamingDataLoader
+from litdata import StreamingDataset, StreamingDataLoader
 import numpy as np
 
 
 class OptimizedVideoDataset:
     """
-    Optimized video dataset using LitData StreamDataset.
+    Optimized video dataset using LitData StreamingDataset.
     
     This dataset loads videos from an optimized dataset created with litdata.optimize().
     It applies the same frame sampling and temporal downsampling as CustomVideoDataset
@@ -47,18 +47,18 @@ class OptimizedVideoDataset:
         if not os.path.exists(data_dir):
             raise FileNotFoundError(f"Optimized dataset directory not found: {data_dir}")
         
-        # Initialize StreamDataset from the optimized data directory
-        # StreamDataset.from_data() loads the optimized dataset
+        # Initialize StreamingDataset from the optimized data directory
+        # StreamingDataset.from_data() loads the optimized dataset
         try:
-            # Use from_data class method to create StreamDataset
-            self._stream_dataset = StreamDataset.from_data(data_dir)
+            # Use from_data class method to create StreamingDataset
+            self._stream_dataset = StreamingDataset.from_data(data_dir)
         except (AttributeError, TypeError) as e:
             # Fallback: try direct initialization
             try:
-                self._stream_dataset = StreamDataset(data_dir)
+                self._stream_dataset = StreamingDataset(data_dir)
             except Exception as e2:
                 raise RuntimeError(
-                    f"Failed to initialize StreamDataset from {data_dir}. "
+                    f"Failed to initialize StreamingDataset from {data_dir}. "
                     f"Tried from_data() and direct initialization. "
                     f"Errors: {e}, {e2}"
                 )
@@ -75,7 +75,7 @@ class OptimizedVideoDataset:
                 random.seed(seed)
             
             subset_size = int(self._dataset_size * subset_ratio)
-            # For StreamDataset, we'll handle subset sampling in __getitem__
+            # For StreamingDataset, we'll handle subset sampling in __getitem__
             self._subset_indices = set(random.sample(range(self._dataset_size), subset_size))
             self._dataset_size = subset_size
             print(f"Using {subset_size} videos ({subset_ratio*100:.1f}% of dataset)")
@@ -111,7 +111,7 @@ class OptimizedVideoDataset:
         else:
             actual_idx = idx
         
-        # Load data from StreamDataset
+        # Load data from StreamingDataset
         # The optimized dataset returns a dict with "path" and "video" keys
         try:
             data = self._stream_dataset[actual_idx]

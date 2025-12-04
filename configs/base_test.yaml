@@ -4,7 +4,7 @@
 # Dataset configuration
 data:
   # Whether to use optimized litdata datasets (created with optimize_dataset.py)
-  # Set to true to use StreamDataset and StreamingDataLoader
+  # Set to true to use StreamingDataset and StreamingDataLoader
   use_optimized: false
   # Path to optimized training dataset directory (only used if use_optimized is true)
   train_optimized_dir: null
