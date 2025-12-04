@@ -3,13 +3,22 @@
 
 # Dataset configuration
 data:
+  # Whether to use optimized litdata datasets (created with optimize_dataset.py)
+  # Set to true to use StreamDataset and StreamingDataLoader
+  use_optimized: false
+  # Path to optimized training dataset directory (only used if use_optimized is true)
+  train_optimized_dir: null
+  # Path to optimized validation dataset directory (only used if use_optimized is true)
+  val_optimized_dir: null
   # Path to CSV file containing training video paths (one path per line)
+  # Only used if use_optimized is false
   train_csv: "mp4_paths.csv"
   # Path to CSV file containing validation video paths (one path per line)
+  # Only used if use_optimized is false
   val_csv: "val500_2023-2024.csv"
   # Optional: Use a random subset of the training dataset (null to use full dataset)
   # Value should be a float between 0 and 1, e.g., 0.1 for 10% of the dataset
-  subset_ratio: null
+  subset_ratio: 0.01
   # Custom normalization values for the dataset
   # These replace the default ImageNet normalization
   normalize_mean: [0.117, 0.114, 0.113]
@@ -41,11 +50,11 @@ model:
 # Training configuration
 training:
   # Batch size per GPU
-  batch_size: 512
+  batch_size: 64
   # Number of data loading workers
-  num_workers: 32
+  num_workers: 10
   # Maximum number of training epochs
-  max_epochs: 10
+  max_epochs: 1
   # Whether to pin memory in DataLoader (faster GPU transfer)
   pin_memory: true
   # Random seed for reproducibility
