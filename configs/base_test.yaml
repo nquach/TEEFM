@@ -9,7 +9,7 @@ data:
   val_csv: "val500_2023-2024.csv"
   # Optional: Use a random subset of the training dataset (null to use full dataset)
   # Value should be a float between 0 and 1, e.g., 0.1 for 10% of the dataset
-  subset_ratio: 0.01
+  subset_ratio: null
   # Custom normalization values for the dataset
   # These replace the default ImageNet normalization
   normalize_mean: [0.117, 0.114, 0.113]
@@ -41,11 +41,11 @@ model:
 # Training configuration
 training:
   # Batch size per GPU
-  batch_size: 128
+  batch_size: 512
   # Number of data loading workers
-  num_workers: 8
+  num_workers: 32
   # Maximum number of training epochs
-  max_epochs: 1
+  max_epochs: 10
   # Whether to pin memory in DataLoader (faster GPU transfer)
   pin_memory: true
   # Random seed for reproducibility
@@ -75,12 +75,14 @@ optimizer:
 
 # Checkpoint configuration
 checkpoint:
+  # Whether to save model checkpoints (set to false to disable checkpointing)
+  enable: false
   # Directory to save checkpoints
   dir: "output/checkpoints"
   # Prefix for checkpoint filenames
   prefix: "videomae"
   # Number of best checkpoints to keep
-  save_top_k: 1
+  save_top_k: 3
   # Metric to monitor for saving best checkpoints
   monitor: "val_loss"
   # Save checkpoints every N epochs (in addition to best checkpoints)
