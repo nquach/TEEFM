@@ -3,9 +3,18 @@
 
 # Dataset configuration
 data:
+  # Whether to use optimized litdata datasets (created with optimize_dataset.py)
+  # Set to true to use StreamDataset and StreamingDataLoader
+  use_optimized: false
+  # Path to optimized training dataset directory (only used if use_optimized is true)
+  train_optimized_dir: null
+  # Path to optimized validation dataset directory (only used if use_optimized is true)
+  val_optimized_dir: null
   # Path to CSV file containing training video paths (one path per line)
+  # Only used if use_optimized is false
   train_csv: "mp4_paths.csv"
   # Path to CSV file containing validation video paths (one path per line)
+  # Only used if use_optimized is false
   val_csv: "val500_2023-2024.csv"
   # Optional: Use a random subset of the training dataset (null to use full dataset)
   # Value should be a float between 0 and 1, e.g., 0.1 for 10% of the dataset

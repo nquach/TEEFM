@@ -12,3 +12,4 @@ schedulefree
 torchvision
 numpy==1.26.4
 av
+litdata

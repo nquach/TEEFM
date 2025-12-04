@@ -15,8 +15,18 @@ from torch.utils.data import DataLoader
 from pathlib import Path
 
 from datasets.custom_video_dataset import CustomVideoDataset
+from datasets.optimized_video_dataset import OptimizedVideoDataset
 from transforms.custom_transforms import DataAugmentationForVideoMAE
 from lightning_module import VideoMAELightningModule
+
+# Try to import litdata components
+try:
+    from litdata import StreamingDataLoader
+    LITDATA_AVAILABLE = True
+except ImportError:
+    LITDATA_AVAILABLE = False
+    StreamingDataLoader = None
+    print("Warning: litdata package not found. Install with: pip install litdata")
 
 
 def load_config(config_path):
@@ -42,15 +52,20 @@ def create_datasets(config):
     """
     Create training and validation datasets.
     
+    Supports both regular CSV-based datasets and optimized litdata datasets.
+    
     Args:
         config (dict): Configuration dictionary
     
     Returns:
-        tuple: (train_dataset, val_dataset)
+        tuple: (train_dataset, val_dataset, use_optimized)
     """
     data_config = config['data']
     model_config = config['model']
     training_config = config['training']
+    
+    # Check if optimized datasets should be used
+    use_optimized = data_config.get('use_optimized', False)
     
     # Get normalization values
     normalize_mean = data_config.get('normalize_mean', [0.117, 0.114, 0.113])
@@ -79,60 +94,129 @@ def create_datasets(config):
         motion_centric_masking_ratio=model_config.get('motion_centric_masking_ratio', 0.7)
     )
     
-    # Create training dataset
-    train_dataset = CustomVideoDataset(
-        csv_file=data_config['train_csv'],
-        frames_to_sample=training_config.get('frames_to_sample', 32),
-        temporal_stride=training_config.get('temporal_stride', 2),
-        subset_ratio=data_config.get('subset_ratio'),
-        seed=training_config.get('seed', 0),
-        transform=transform
-    )
+    if use_optimized:
+        # Use optimized litdata datasets
+        if not LITDATA_AVAILABLE:
+            raise ImportError(
+                "litdata package is required for optimized datasets. "
+                "Install with: pip install litdata"
+            )
+        
+        train_data_dir = data_config.get('train_optimized_dir')
+        val_data_dir = data_config.get('val_optimized_dir')
+        
+        if train_data_dir is None or val_data_dir is None:
+            raise ValueError(
+                "use_optimized is True but train_optimized_dir or val_optimized_dir is not specified. "
+                "Please provide paths to optimized dataset directories."
+            )
+        
+        print("Using optimized litdata datasets")
+        
+        # Create training dataset from optimized data
+        train_dataset = OptimizedVideoDataset(
+            data_dir=train_data_dir,
+            frames_to_sample=training_config.get('frames_to_sample', 32),
+            temporal_stride=training_config.get('temporal_stride', 2),
+            subset_ratio=data_config.get('subset_ratio'),
+            seed=training_config.get('seed', 0),
+            transform=transform
+        )
+        
+        # Create validation dataset from optimized data
+        val_dataset = OptimizedVideoDataset(
+            data_dir=val_data_dir,
+            frames_to_sample=training_config.get('frames_to_sample', 32),
+            temporal_stride=training_config.get('temporal_stride', 2),
+            subset_ratio=None,  # Always use full validation set
+            seed=training_config.get('seed', 0),
+            transform=transform
+        )
+    else:
+        # Use regular CSV-based datasets
+        print("Using regular CSV-based datasets")
+        
+        # Create training dataset
+        train_dataset = CustomVideoDataset(
+            csv_file=data_config['train_csv'],
+            frames_to_sample=training_config.get('frames_to_sample', 32),
+            temporal_stride=training_config.get('temporal_stride', 2),
+            subset_ratio=data_config.get('subset_ratio'),
+            seed=training_config.get('seed', 0),
+            transform=transform
+        )
+        
+        # Create validation dataset (no subset sampling for validation)
+        val_dataset = CustomVideoDataset(
+            csv_file=data_config['val_csv'],
+            frames_to_sample=training_config.get('frames_to_sample', 32),
+            temporal_stride=training_config.get('temporal_stride', 2),
+            subset_ratio=None,  # Always use full validation set
+            seed=training_config.get('seed', 0),
+            transform=transform
+        )
     
-    # Create validation dataset (no subset sampling for validation)
-    val_dataset = CustomVideoDataset(
-        csv_file=data_config['val_csv'],
-        frames_to_sample=training_config.get('frames_to_sample', 32),
-        temporal_stride=training_config.get('temporal_stride', 2),
-        subset_ratio=None,  # Always use full validation set
-        seed=training_config.get('seed', 0),
-        transform=transform
-    )
-    
-    return train_dataset, val_dataset
+    return train_dataset, val_dataset, use_optimized
 
 
-def create_data_loaders(train_dataset, val_dataset, config):
+def create_data_loaders(train_dataset, val_dataset, config, use_optimized=False):
     """
     Create data loaders for training and validation.
+    
+    Uses StreamingDataLoader for optimized datasets, regular DataLoader otherwise.
     
     Args:
         train_dataset: Training dataset
         val_dataset: Validation dataset
         config (dict): Configuration dictionary
+        use_optimized (bool): Whether to use StreamingDataLoader for optimized datasets
     
     Returns:
         tuple: (train_loader, val_loader)
     """
     training_config = config['training']
+    batch_size = training_config['batch_size']
     
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=training_config['batch_size'],
-        shuffle=True,
-        num_workers=training_config.get('num_workers', 10),
-        pin_memory=training_config.get('pin_memory', True),
-        drop_last=True  # Drop last incomplete batch
-    )
-    
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=training_config['batch_size'],
-        shuffle=False,
-        num_workers=training_config.get('num_workers', 10),
-        pin_memory=training_config.get('pin_memory', True),
-        drop_last=False  # Keep all validation samples
-    )
+    if use_optimized and LITDATA_AVAILABLE:
+        # Use StreamingDataLoader for optimized datasets
+        print("Using StreamingDataLoader for optimized datasets")
+        
+        train_loader = StreamingDataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=training_config.get('num_workers', 10),
+            pin_memory=training_config.get('pin_memory', True),
+            drop_last=True  # Drop last incomplete batch
+        )
+        
+        val_loader = StreamingDataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=training_config.get('num_workers', 10),
+            pin_memory=training_config.get('pin_memory', True),
+            drop_last=False  # Keep all validation samples
+        )
+    else:
+        # Use regular DataLoader
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=training_config.get('num_workers', 10),
+            pin_memory=training_config.get('pin_memory', True),
+            drop_last=True  # Drop last incomplete batch
+        )
+        
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=training_config.get('num_workers', 10),
+            pin_memory=training_config.get('pin_memory', True),
+            drop_last=False  # Keep all validation samples
+        )
     
     return train_loader, val_loader
 
@@ -169,13 +253,13 @@ def main():
     
     # Create datasets
     print("Creating datasets...")
-    train_dataset, val_dataset = create_datasets(config)
+    train_dataset, val_dataset, use_optimized = create_datasets(config)
     print(f"Training dataset size: {len(train_dataset)}")
     print(f"Validation dataset size: {len(val_dataset)}")
     
     # Create data loaders
     print("Creating data loaders...")
-    train_loader, val_loader = create_data_loaders(train_dataset, val_dataset, config)
+    train_loader, val_loader = create_data_loaders(train_dataset, val_dataset, config, use_optimized)
     
     # Create Lightning module
     print("Creating model...")
