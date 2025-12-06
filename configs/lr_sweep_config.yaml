@@ -1,0 +1,42 @@
+# Learning Rate Sweep Configuration using Optuna
+# This configuration extends the base training config to perform LR optimization
+
+# Path to base training configuration file
+# All settings from base config will be used, except learning rate which will be optimized
+base_config_path: "configs/train_config.yaml"
+
+# Optuna study configuration
+lr_sweep:
+  # Study name (used for storage and identification)
+  study_name: "videomae_lr_sweep"
+  
+  # Number of trials to run
+  n_trials: 10
+  
+  # Optimization direction: "minimize" for validation loss
+  direction: "minimize"
+  
+  # Study storage (SQLite database for persistence and resumability)
+  # Set to null to use in-memory storage (not resumable)
+  storage: "sqlite:///output/lr_sweep/lr_sweep_study.db"
+  
+  # Learning rate search space
+  lr_min: 1e-6      # Minimum learning rate to test
+  lr_max: 1e-2      # Maximum learning rate to test
+  lr_log_scale: true  # Use log-uniform distribution (recommended for LR)
+  
+  # Training configuration for each trial
+  epochs_per_trial: 15  # Number of epochs to train each trial (moderate for good estimates)
+  
+  # Pruning configuration (early stopping for unpromising trials)
+  enable_pruning: true  # Enable pruning to save time
+  pruning_patience: 3   # Number of epochs without improvement before pruning
+  
+  # Random seed for reproducibility
+  seed: 42
+  
+  # Output configuration
+  output_dir: "output/lr_sweep"
+  save_best_config: true  # Save best config with optimal LR for use in full training
+  generate_plots: true     # Generate visualization plots (requires plotly and kaleido)
+
