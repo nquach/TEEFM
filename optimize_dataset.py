@@ -47,17 +47,17 @@ def optimize_dataset(csv_path, dataset_dir, num_workers=8, chunk_bytes='64MB'):
 	video_paths = [path for path in video_paths if path]
 	#video_paths = [path for path in tqdm(video_paths) if not is_mp4_corrupted(path)] #filter out corrupted mp4 files
 	ld.optimize(fn=get_video_tensor, inputs=video_paths, output_dir=dataset_dir, 
-		num_workers=num_workers, chunk_bytes=chunk_bytes)
+		num_workers=num_workers, chunk_bytes=chunk_bytes, compression='zstd')
 
 if __name__ == '__main__':
 	#csv_path1 = '/teamspace/studios/this_studio/TEEFM/mp4_paths.csv'
 	csv_path1 = '/share/pi/krhee/nquach/TEE_foundation/csv_files/mp4_paths_carina.csv'
 	#csv_path2 = '/teamspace/studios/this_studio/TEEFM/val500_2023-2024.csv'
-	csv_path2 = '/share/pi/krhee/nquach/TEE_foundation/csv_files/val500_2023-2024_carina.csv'
+	csv_path2 = '/share/pi/krhee/nquach/TEE_foundation/csv_files/val_2023-2024-carina.csv'
 	#output_dir1 = '/teamspace/studios/this_studio/opt_mp4-2014-2023'
-	output_dir1 = '/share/pi/krhee/nquach/TEE_foundation/opt_mp4-2014-2023'
+	output_dir1 = '/share/pi/krhee/nquach/TEE_foundation/opt_mp4-2014-2023_compressed'
 	#output_dir2 = '/teamspace/studios/this_studio/opt_mp4-2023-2024_val500'
-	output_dir2 = '/share/pi/krhee/nquach/TEE_foundation/opt_mp4-2023-2024_val500'
+	output_dir2 = '/share/pi/krhee/nquach/TEE_foundation/opt_mp4-2023-2024'
 	#safe_makedir(output_dir1)
 	safe_makedir(output_dir1)
 	num_workers = 20
