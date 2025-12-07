@@ -1,14 +1,17 @@
 """
-Learning Rate Sweep Script using Optuna
+Hyperparameter Sweep Script using Optuna
 
 This script performs hyperparameter optimization to find the optimal learning rate
-for training EVEREST ViT-S VideoMAE models. It uses Optuna to search the learning
-rate space and selects the best based on validation loss.
+and warmup_steps for training EVEREST ViT-S VideoMAE models. It uses Optuna to search
+the hyperparameter space and selects the best based on validation loss.
+
+Note: warmup_steps is only tuned when using AdamW optimizer (not RAdam).
 """
 
 import os
 import yaml
 import json
+import copy
 import torch
 import optuna
 from optuna.samplers import TPESampler
@@ -30,13 +33,14 @@ from utils.optuna_utils import (
 
 def objective(trial, base_config, sweep_config):
     """
-    Optuna objective function for learning rate optimization.
+    Optuna objective function for learning rate and warmup_steps optimization.
     
     This function is called for each trial. It:
     1. Suggests a learning rate from the search space
-    2. Creates a model with that learning rate
-    3. Trains for a specified number of epochs
-    4. Returns the best validation loss
+    2. Conditionally suggests warmup_steps (only for AdamW optimizer)
+    3. Creates a model with those hyperparameters
+    4. Trains for a specified number of epochs
+    5. Returns the best validation loss
     
     Args:
         trial (optuna.Trial): The Optuna trial object
@@ -56,13 +60,30 @@ def objective(trial, base_config, sweep_config):
     else:
         lr = trial.suggest_float('learning_rate', lr_min, lr_max)
     
+    # Conditionally tune warmup_steps (only for AdamW optimizer)
+    optimizer_type = base_config['optimizer'].get('type', 'adamw').lower()
+    tune_warmup = sweep_config.get('tune_warmup_steps', True) and optimizer_type == 'adamw'
+    
+    if tune_warmup:
+        warmup_min = sweep_config.get('warmup_min', 0)
+        warmup_max = sweep_config.get('warmup_max', 5000)
+        warmup_steps = trial.suggest_int('warmup_steps', warmup_min, warmup_max)
+    else:
+        # Use base config value or default to 0
+        warmup_steps = base_config['optimizer'].get('warmup_steps', 0)
+    
     print(f"\n{'='*60}")
     print(f"Trial {trial.number}: Testing learning rate = {lr:.6e}")
+    if tune_warmup:
+        print(f"              Testing warmup_steps = {warmup_steps}")
     print(f"{'='*60}")
     
-    # Update config with suggested learning rate
-    config = base_config.copy()
+    # Update config with suggested hyperparameters
+    # Use deepcopy to avoid modifying the original base_config
+    config = copy.deepcopy(base_config)
     config['optimizer']['lr'] = lr
+    if tune_warmup:
+        config['optimizer']['warmup_steps'] = warmup_steps
     
     # Set epochs per trial
     epochs_per_trial = sweep_config.get('epochs_per_trial', 15)
@@ -159,16 +180,16 @@ def objective(trial, base_config, sweep_config):
 
 def create_study(sweep_config, storage=None):
     """
-    Create an Optuna study for learning rate optimization.
+    Create an Optuna study for hyperparameter optimization (learning rate and warmup_steps).
     
     Args:
-        sweep_config (dict): LR sweep configuration
+        sweep_config (dict): Hyperparameter sweep configuration
         storage (str, optional): Storage URL for study persistence (e.g., 'sqlite:///study.db')
     
     Returns:
         optuna.Study: Created study object
     """
-    study_name = sweep_config.get('study_name', 'videomae_lr_sweep')
+    study_name = sweep_config.get('study_name', 'videomae_hyperparameter_sweep')
     direction = sweep_config.get('direction', 'minimize')
     
     # Create sampler (TPE is good for continuous hyperparameters)
@@ -219,6 +240,8 @@ def save_study_results(study, output_dir, sweep_config):
     best_params = save_study_results_util(study, output_dir, sweep_config)
     
     print(f"\nBest learning rate: {best_params['best_learning_rate']:.6e}")
+    if 'best_warmup_steps' in best_params:
+        print(f"Best warmup steps: {best_params['best_warmup_steps']}")
     print(f"Best validation loss: {best_params['best_value']:.6f}")
     print(f"Best trial number: {best_params['best_trial_number']}")
     
@@ -298,13 +321,21 @@ def main():
     # Create study
     study = create_study(sweep_config, storage=storage if storage else None)
     
+    # Check if warmup_steps will be tuned
+    optimizer_type = base_config['optimizer'].get('type', 'adamw').lower()
+    tune_warmup = sweep_config.get('tune_warmup_steps', True) and optimizer_type == 'adamw'
+    
     print(f"\n{'='*60}")
-    print(f"Starting Learning Rate Sweep")
+    print(f"Starting Hyperparameter Sweep")
     print(f"{'='*60}")
     print(f"Study name: {study.study_name}")
     print(f"Number of trials: {sweep_config.get('n_trials', 10)}")
     print(f"Epochs per trial: {sweep_config.get('epochs_per_trial', 15)}")
     print(f"LR range: [{sweep_config.get('lr_min', 1e-6):.2e}, {sweep_config.get('lr_max', 1e-2):.2e}]")
+    if tune_warmup:
+        print(f"Warmup steps range: [{sweep_config.get('warmup_min', 0)}, {sweep_config.get('warmup_max', 5000)}]")
+    else:
+        print(f"Warmup steps: Not tuned (optimizer={optimizer_type})")
     print(f"Pruning enabled: {sweep_config.get('enable_pruning', True)}")
     print(f"{'='*60}\n")
     

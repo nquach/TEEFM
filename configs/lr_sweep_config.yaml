@@ -1,14 +1,15 @@
-# Learning Rate Sweep Configuration using Optuna
-# This configuration extends the base training config to perform LR optimization
+# Hyperparameter Sweep Configuration using Optuna
+# This configuration extends the base training config to perform hyperparameter optimization
+# (learning rate and warmup_steps for AdamW optimizer)
 
 # Path to base training configuration file
-# All settings from base config will be used, except learning rate which will be optimized
+# All settings from base config will be used, except learning rate and warmup_steps which will be optimized
 base_config_path: "configs/train_config.yaml"
 
 # Optuna study configuration
 lr_sweep:
   # Study name (used for storage and identification)
-  study_name: "videomae_lr_sweep"
+  study_name: "videomae_hyperparameter_sweep"
   
   # Number of trials to run
   n_trials: 10
@@ -25,6 +26,12 @@ lr_sweep:
   lr_max: 1e-2      # Maximum learning rate to test
   lr_log_scale: true  # Use log-uniform distribution (recommended for LR)
   
+  # Warmup steps search space (only applies to AdamW optimizer)
+  # Note: warmup_steps is only tuned when optimizer type is 'adamw' in base config
+  tune_warmup_steps: true  # Enable/disable warmup_steps tuning (only effective for AdamW)
+  warmup_min: 0      # Minimum warmup steps to test
+  warmup_max: 5000   # Maximum warmup steps to test
+  
   # Training configuration for each trial
   epochs_per_trial: 15  # Number of epochs to train each trial (moderate for good estimates)
   
@@ -37,6 +44,6 @@ lr_sweep:
   
   # Output configuration
   output_dir: "output/lr_sweep"
-  save_best_config: true  # Save best config with optimal LR for use in full training
+  save_best_config: true  # Save best config with optimal hyperparameters for use in full training
   generate_plots: true     # Generate visualization plots (requires plotly and kaleido)
 

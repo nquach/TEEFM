@@ -36,6 +36,10 @@ def save_study_results(study: optuna.Study, output_dir: str, config: Dict[str, A
         'n_failed': len([t for t in study.trials if t.state == optuna.trial.TrialState.FAIL])
     }
     
+    # Add warmup_steps if it was tuned
+    if 'warmup_steps' in study.best_params:
+        best_params['best_warmup_steps'] = study.best_params.get('warmup_steps')
+    
     best_params_path = os.path.join(output_dir, 'best_params.json')
     with open(best_params_path, 'w') as f:
         json.dump(best_params, f, indent=2)
@@ -107,6 +111,10 @@ def save_best_config(study: optuna.Study, base_config_path: str, output_dir: str
     
     # Update with best hyperparameters
     best_config['optimizer']['lr'] = study.best_params.get('learning_rate')
+    
+    # Update warmup_steps if it was tuned
+    if 'warmup_steps' in study.best_params:
+        best_config['optimizer']['warmup_steps'] = study.best_params.get('warmup_steps')
     
     # Save best config
     os.makedirs(output_dir, exist_ok=True)

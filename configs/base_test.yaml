@@ -69,7 +69,7 @@ training:
 # Optimizer configuration (Schedule-Free Optimizers)
 optimizer:
   # Optimizer type: "adamw" (AdamWScheduleFree) or "radam" (RAdamScheduleFree)
-  type: "radam"
+  type: "adamw"
   # Learning rate
   lr: 1e-3
   # Weight decay
