@@ -1,8 +1,9 @@
 """
 Optimized Video Dataset using LitData StreamingDataset
 
-This module provides a wrapper around litdata's StreamingDataset for loading
-optimized video datasets created with litdata.optimize().
+This module provides a subclass of litdata's StreamingDataset for loading
+optimized video datasets created with litdata.optimize(), with custom processing
+for frame sampling, temporal downsampling, and transforms.
 """
 
 import os
@@ -13,13 +14,14 @@ from litdata import StreamingDataset, StreamingDataLoader
 import numpy as np
 
 
-class OptimizedVideoDataset:
+class OptimizedVideoDataset(StreamingDataset):
     """
     Optimized video dataset using LitData StreamingDataset.
     
-    This dataset loads videos from an optimized dataset created with litdata.optimize().
-    It applies the same frame sampling and temporal downsampling as CustomVideoDataset
-    but uses the optimized data format for faster loading.
+    This dataset inherits from StreamingDataset and loads videos from an optimized
+    dataset created with litdata.optimize(). It applies the same frame sampling and
+    temporal downsampling as CustomVideoDataset but uses the optimized data format
+    for faster loading.
     
     Args:
         data_dir (str): Path to the optimized dataset directory
@@ -40,31 +42,24 @@ class OptimizedVideoDataset:
         seed=None,
         transform=None
     ):
+        # Initialize parent StreamingDataset class
+        # StreamingDataset is initialized with data_dir
+        try:
+            super().__init__(data_dir)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to initialize StreamingDataset from {data_dir}. "
+                f"Error: {e}"
+            )
+        
+        # Store custom processing parameters
         self.frames_to_sample = frames_to_sample
         self.temporal_stride = temporal_stride
         self.transform = transform
-        '''
-        if not os.path.exists(data_dir):
-            raise FileNotFoundError(f"Optimized dataset directory not found: {data_dir}")
-        '''
-        # Initialize StreamingDataset from the optimized data directory
-        # StreamingDataset.from_data() loads the optimized dataset
-        try:
-            # Use from_data class method to create StreamingDataset
-            self._stream_dataset = StreamingDataset.from_data(data_dir)
-        except (AttributeError, TypeError) as e:
-            # Fallback: try direct initialization
-            try:
-                self._stream_dataset = StreamingDataset(data_dir)
-            except Exception as e2:
-                raise RuntimeError(
-                    f"Failed to initialize StreamingDataset from {data_dir}. "
-                    f"Tried from_data() and direct initialization. "
-                    f"Errors: {e}, {e2}"
-                )
         
-        # Get the number of items in the dataset
-        self._dataset_size = len(self._stream_dataset)
+        # Get the full dataset size from parent
+        # We need to call parent's __len__ after initialization
+        parent_size = super().__len__()
         
         # Apply subset sampling if specified
         if subset_ratio is not None:
@@ -74,19 +69,25 @@ class OptimizedVideoDataset:
             if seed is not None:
                 random.seed(seed)
             
-            subset_size = int(self._dataset_size * subset_ratio)
-            # For StreamingDataset, we'll handle subset sampling in __getitem__
-            self._subset_indices = set(random.sample(range(self._dataset_size), subset_size))
-            self._dataset_size = subset_size
+            subset_size = int(parent_size * subset_ratio)
+            
+            # Create subset indices mapping
+            self._subset_indices = sorted(random.sample(range(parent_size), subset_size))
+            self._subset_size = subset_size
             print(f"Using {subset_size} videos ({subset_ratio*100:.1f}% of dataset)")
         else:
             self._subset_indices = None
+            self._subset_size = None
         
-        print(f"Loaded optimized dataset from {data_dir} with {self._dataset_size} items")
+        print(f"Loaded optimized dataset from {data_dir}")
     
     def __len__(self):
         """Return the number of videos in the dataset."""
-        return self._dataset_size
+        if self._subset_indices is not None:
+            return self._subset_size
+        else:
+            # Return parent's length
+            return super().__len__()
     
     def __getitem__(self, idx):
         """
@@ -103,18 +104,17 @@ class OptimizedVideoDataset:
         # If subset sampling is enabled, map idx to actual dataset index
         if self._subset_indices is not None:
             # Convert idx to actual index in the subset
-            actual_indices = sorted(list(self._subset_indices))
-            if idx >= len(actual_indices):
+            if idx >= len(self._subset_indices):
                 # Wrap around if needed
-                idx = idx % len(actual_indices)
-            actual_idx = actual_indices[idx]
+                idx = idx % len(self._subset_indices)
+            actual_idx = self._subset_indices[idx]
         else:
             actual_idx = idx
         
-        # Load data from StreamingDataset
+        # Load data from parent StreamingDataset
         # The optimized dataset returns a dict with "path" and "video" keys
         try:
-            data = self._stream_dataset[actual_idx]
+            data = super().__getitem__(actual_idx)
             
             # Handle different data formats
             if isinstance(data, dict):
@@ -133,10 +133,11 @@ class OptimizedVideoDataset:
             warnings.warn(f"Error loading optimized video at index {actual_idx}: {e}. Using random index.")
             # Fallback to a random index
             if self._subset_indices is not None:
-                actual_idx = random.choice(list(self._subset_indices))
+                actual_idx = random.choice(self._subset_indices)
             else:
-                actual_idx = random.randint(0, len(self._stream_dataset) - 1)
-            data = self._stream_dataset[actual_idx]
+                parent_len = super().__len__()
+                actual_idx = random.randint(0, parent_len - 1)
+            data = super().__getitem__(actual_idx)
             if isinstance(data, dict):
                 video = data.get('video', data.get('data'))
             else:
