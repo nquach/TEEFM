@@ -116,11 +116,11 @@ class OptimizedVideoDataset(StreamingDataset):
             if idx_value >= len(self._subset_indices):
                 # Wrap around if needed
                 idx_value = idx_value % len(self._subset_indices)
-            actual_idx = self._subset_indices[idx_value]
-            # For subset sampling, we need to pass integer to parent
-            parent_idx = actual_idx
+            # For subset sampling, we must use integer index
+            parent_idx = self._subset_indices[idx_value]
         else:
-            # No subset sampling - pass the original idx (could be ChunkedIndex or int)
+            # No subset sampling - pass original idx to parent
+            # This preserves ChunkedIndex for StreamingDataLoader's chunking mechanism
             parent_idx = idx
         
         # Load data from parent StreamingDataset
@@ -132,30 +132,77 @@ class OptimizedVideoDataset(StreamingDataset):
             if isinstance(data, dict):
                 video = data.get('video', data.get('data'))
                 if video is None:
-                    raise ValueError(f"Video data not found in optimized dataset item {parent_idx}")
+                    # Try other common keys
+                    video = data.get('input', data.get('frames', data.get('tensor')))
+                if video is None:
+                    # Format parent_idx for error message
+                    idx_str = str(parent_idx.index) if hasattr(parent_idx, 'index') else str(parent_idx)
+                    raise ValueError(
+                        f"Video data not found in optimized dataset item {idx_str}. "
+                        f"Available keys: {list(data.keys()) if isinstance(data, dict) else 'N/A'}"
+                    )
             else:
                 # If data is directly a tensor
                 video = data
             
-            # Ensure video is a torch tensor
+            # Ensure video is a torch tensor (not a dict or other type)
+            if isinstance(video, dict):
+                # Format parent_idx for error message
+                idx_str = str(parent_idx.index) if hasattr(parent_idx, 'index') else str(parent_idx)
+                raise ValueError(
+                    f"Video data is still a dict after extraction at index {idx_str}. "
+                    f"This should not happen. Data structure: {type(data)}"
+                )
+            
             if not isinstance(video, torch.Tensor):
-                video = torch.tensor(video)
+                try:
+                    video = torch.tensor(video)
+                except Exception as e:
+                    # Format parent_idx for error message
+                    idx_str = str(parent_idx.index) if hasattr(parent_idx, 'index') else str(parent_idx)
+                    raise ValueError(
+                        f"Could not convert video data to tensor at index {idx_str}. "
+                        f"Type: {type(video)}, Error: {e}"
+                    )
             
         except Exception as e:
-            warnings.warn(f"Error loading optimized video at index {parent_idx}: {e}. Using random index.")
+            # Format parent_idx for error message (handle ChunkedIndex)
+            idx_str = str(parent_idx) if not hasattr(parent_idx, 'index') else str(parent_idx.index)
+            warnings.warn(f"Error loading optimized video at index {idx_str}: {e}. Using random index.")
             # Fallback to a random index (use integer for fallback)
             if self._subset_indices is not None:
-                actual_idx = random.choice(self._subset_indices)
+                fallback_idx = random.choice(self._subset_indices)
             else:
                 parent_len = super().__len__()
-                actual_idx = random.randint(0, parent_len - 1)
-            data = super().__getitem__(actual_idx)
+                fallback_idx = random.randint(0, parent_len - 1)
+            data = super().__getitem__(fallback_idx)
+            # Handle different data formats in fallback
             if isinstance(data, dict):
                 video = data.get('video', data.get('data'))
+                if video is None:
+                    video = data.get('input', data.get('frames', data.get('tensor')))
+                if video is None:
+                    raise ValueError(
+                        f"Video data not found in fallback at index {fallback_idx}. "
+                        f"Available keys: {list(data.keys())}"
+                    )
             else:
                 video = data
+            
+            # Ensure video is a torch tensor (not a dict)
+            if isinstance(video, dict):
+                raise ValueError(
+                    f"Video data is still a dict after extraction in fallback at index {fallback_idx}"
+                )
+            
             if not isinstance(video, torch.Tensor):
-                video = torch.tensor(video)
+                try:
+                    video = torch.tensor(video)
+                except Exception as e:
+                    raise ValueError(
+                        f"Could not convert fallback video data to tensor at index {fallback_idx}. "
+                        f"Type: {type(video)}, Error: {e}"
+                    )
         
         # video shape should be [T, H, W, C] where C=3 for RGB
         if len(video.shape) != 4:
@@ -167,7 +214,9 @@ class OptimizedVideoDataset(StreamingDataset):
         if num_frames < self.frames_to_sample:
             # If video is too short, repeat the last frame
             if num_frames == 0:
-                raise ValueError(f"Video at index {parent_idx} has 0 frames")
+                # Format parent_idx for error message
+                idx_str = str(parent_idx.index) if hasattr(parent_idx, 'index') else str(parent_idx)
+                raise ValueError(f"Video at index {idx_str} has 0 frames")
             padding_needed = self.frames_to_sample - num_frames
             last_frame = video[-1:].repeat(padding_needed, 1, 1, 1)
             video = torch.cat([video, last_frame], dim=0)
@@ -191,12 +240,23 @@ class OptimizedVideoDataset(StreamingDataset):
         
         # Check if video_tensor is empty before calling max()
         if video_tensor.numel() == 0:
-            raise ValueError(f"Video at index {parent_idx} resulted in empty tensor after processing")
+            # Format parent_idx for error message
+            idx_str = str(parent_idx.index) if hasattr(parent_idx, 'index') else str(parent_idx)
+            raise ValueError(f"Video at index {idx_str} resulted in empty tensor after processing")
         
         # Normalize to [0, 1] if not already (read_video returns uint8 [0, 255])
         max_val = video_tensor.max().item() if video_tensor.numel() > 0 else 0.0
         if max_val > 1.0:
             video_tensor = video_tensor / 255.0
+        
+        # Final validation: ensure video_tensor is a tensor before transform
+        if not isinstance(video_tensor, torch.Tensor):
+            # Format parent_idx for error message
+            idx_str = str(parent_idx.index) if hasattr(parent_idx, 'index') else str(parent_idx)
+            raise ValueError(
+                f"video_tensor is not a torch.Tensor before transform at index {idx_str}. "
+                f"Type: {type(video_tensor)}"
+            )
         
         # Apply transform if provided (for masking, normalization, etc.)
         if self.transform is not None:
