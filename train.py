@@ -221,6 +221,62 @@ def create_data_loaders(train_dataset, val_dataset, config, use_optimized=False)
     return train_loader, val_loader
 
 
+def setup_litdata_cache():
+    """
+    Set up per-process cache directory for litdata to prevent race conditions.
+    
+    This should be called before any litdata operations to ensure each process
+    has its own cache directory. This prevents FileNotFoundError when multiple
+    processes/threads try to delete the same chunk files.
+    """
+    # Only set if not already set (allows user override)
+    if 'LITDATA_CACHE_DIR' not in os.environ:
+        # Get process rank for multi-GPU setups
+        rank = int(os.environ.get('LOCAL_RANK', os.environ.get('RANK', 0)))
+        
+        # Get process ID for additional uniqueness
+        pid = os.getpid()
+        
+        # Create unique cache directory per process
+        cache_base = os.environ.get('HOME', '/tmp')
+        process_cache = os.path.join(cache_base, f'.litdata_cache_rank_{rank}_pid_{pid}')
+        os.environ['LITDATA_CACHE_DIR'] = process_cache
+        os.makedirs(process_cache, exist_ok=True)
+        print(f"Set litdata cache directory: {process_cache} (rank {rank}, pid {pid})")
+
+
+def patch_litdata_delete():
+    """
+    Patch litdata's delete method to gracefully handle FileNotFoundError.
+    
+    This is a workaround for a race condition in litdata where multiple threads
+    may try to delete the same chunk file, causing FileNotFoundError.
+    """
+    if not LITDATA_AVAILABLE:
+        return
+    
+    try:
+        from litdata.streaming import item_loader
+        
+        # Store original delete method
+        original_delete = item_loader.ItemLoader.delete
+        
+        # Create patched version that ignores FileNotFoundError
+        def patched_delete(self, chunk_index, chunk_filepath):
+            try:
+                return original_delete(self, chunk_index, chunk_filepath)
+            except FileNotFoundError:
+                # File already deleted by another thread/process - this is fine
+                pass
+        
+        # Replace the method
+        item_loader.ItemLoader.delete = patched_delete
+        print("Patched litdata delete method to handle FileNotFoundError gracefully")
+    except (ImportError, AttributeError) as e:
+        # If we can't patch it, that's okay - the cache directory setup should help
+        print(f"Could not patch litdata delete method: {e}. Cache directory setup should still help.")
+
+
 def main():
     """Main training function."""
     import argparse
@@ -240,6 +296,14 @@ def main():
     )
     
     args = parser.parse_args()
+    
+    # Set up litdata cache directory early to prevent race conditions
+    # This must be done before any dataset creation
+    setup_litdata_cache()
+    
+    # Patch litdata's delete method to handle FileNotFoundError gracefully
+    # This is a workaround for race conditions in chunk deletion
+    patch_litdata_delete()
     
     # Load configuration
     config = load_config(args.config)

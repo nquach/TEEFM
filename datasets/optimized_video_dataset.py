@@ -42,18 +42,17 @@ class OptimizedVideoDataset(StreamingDataset):
         seed=None,
         transform=None
     ):
-        # Set up per-process cache directory for multi-GPU setups
+        # Set up per-process cache directory for multi-GPU setups (fallback)
         # This prevents race conditions when multiple processes try to delete the same chunks
-        rank = int(os.environ.get('LOCAL_RANK', os.environ.get('RANK', 0)))
-        
-        # Only set cache directory if not already set (allows user override)
+        # Note: Cache directory should ideally be set earlier in train.py, but this serves as a fallback
         if 'LITDATA_CACHE_DIR' not in os.environ:
-            # Use a per-process cache directory to avoid conflicts
+            rank = int(os.environ.get('LOCAL_RANK', os.environ.get('RANK', 0)))
+            pid = os.getpid()
             cache_base = os.environ.get('HOME', '/tmp')
-            process_cache = os.path.join(cache_base, f'.litdata_cache_rank_{rank}')
+            process_cache = os.path.join(cache_base, f'.litdata_cache_rank_{rank}_pid_{pid}')
             os.environ['LITDATA_CACHE_DIR'] = process_cache
             os.makedirs(process_cache, exist_ok=True)
-            print(f"Using per-process cache directory: {process_cache} (rank {rank})")
+            print(f"Set litdata cache directory (fallback): {process_cache} (rank {rank}, pid {pid})")
         
         # Initialize parent StreamingDataset class
         # StreamingDataset is initialized with data_dir
