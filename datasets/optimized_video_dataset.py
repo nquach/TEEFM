@@ -45,7 +45,7 @@ class OptimizedVideoDataset(StreamingDataset):
         # Initialize parent StreamingDataset class
         # StreamingDataset is initialized with data_dir
         try:
-            super().__init__(data_dir)
+            super().__init__(data_dir, transform=None)
         except Exception as e:
             raise RuntimeError(
                 f"Failed to initialize StreamingDataset from {data_dir}. "
