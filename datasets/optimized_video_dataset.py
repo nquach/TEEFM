@@ -55,7 +55,7 @@ class OptimizedVideoDataset(StreamingDataset):
         # Store custom processing parameters
         self.frames_to_sample = frames_to_sample
         self.temporal_stride = temporal_stride
-        self.transform = transform 
+        self.custom_transform = transform 
         
         # Apply subset sampling if specified
         if subset_ratio is not None:
@@ -115,8 +115,8 @@ class OptimizedVideoDataset(StreamingDataset):
             video_tensor = video_tensor / 255.0
         
         # Apply transform if provided (for masking, normalization, etc.)
-        if self.transform is not None:
-            video_tensor, mask = self.transform(video_tensor)
+        if self.custom_transform is not None:
+            video_tensor, mask = self.custom_transform(video_tensor)
             return video_tensor, mask
 
         # Return video and None mask (mask will be generated elsewhere)
