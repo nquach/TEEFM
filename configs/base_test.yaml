@@ -5,11 +5,11 @@
 data:
   # Whether to use optimized litdata datasets (created with optimize_dataset.py)
   # Set to true to use StreamingDataset and StreamingDataLoader
-  use_optimized: false
+  use_optimized: true
   # Path to optimized training dataset directory (only used if use_optimized is true)
-  train_optimized_dir: null
+  train_optimized_dir: 's3://tee-2023-2024/opt_mp4-2023-2024_compressed'
   # Path to optimized validation dataset directory (only used if use_optimized is true)
-  val_optimized_dir: null
+  val_optimized_dir: 's3://tee-2023-2024/opt_mp4-2023-2024_compressed'
   # Path to CSV file containing training video paths (one path per line)
   # Only used if use_optimized is false
   train_csv: "mp4_paths.csv"
@@ -50,9 +50,9 @@ model:
 # Training configuration
 training:
   # Batch size per GPU
-  batch_size: 1024
+  batch_size: 200
   # Number of data loading workers
-  num_workers: 10
+  num_workers: 30
   # Maximum number of training epochs
   max_epochs: 200
   # Whether to pin memory in DataLoader (faster GPU transfer)
@@ -87,11 +87,11 @@ checkpoint:
   # Whether to save model checkpoints (set to false to disable checkpointing)
   enable: true
   # Directory to save checkpoints
-  dir: "output/checkpoints"
+  dir: "./output/checkpoints"
   # Prefix for checkpoint filenames
   prefix: "videomae_VitS_radam_basetest_"
   # Number of best checkpoints to keep
-  save_top_k: 3
+  save_top_k: 1
   # Metric to monitor for saving best checkpoints
   monitor: "val_loss"
   # Save checkpoints every N epochs (in addition to best checkpoints)
@@ -107,7 +107,7 @@ features:
 # Logging configuration
 logging:
   # Directory for TensorBoard logs
-  log_dir: "output/logs"
+  log_dir: "./output/logs"
   # Logging frequency (log every N steps)
   log_freq: 10
 
