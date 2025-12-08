@@ -55,7 +55,7 @@ class OptimizedVideoDataset(StreamingDataset):
         # Store custom processing parameters
         self.frames_to_sample = frames_to_sample
         self.temporal_stride = temporal_stride
-        self.transform = transform
+        self.transform = transform 
         
         # Apply subset sampling if specified
         if subset_ratio is not None:
@@ -80,61 +80,46 @@ class OptimizedVideoDataset(StreamingDataset):
 
         # Load data from parent StreamingDataset
         # The optimized dataset returns a dict with "path" and "video" keys
-        try:
-            data = super().__getitem__(idx)
-            video = data['video']
-                
-            # video shape should be [T, H, W, C] where C=3 for RGB
-            if len(video.shape) != 4:
-                raise ValueError(f"Expected video shape [T, H, W, C], got {video.shape}")
-            
-            num_frames = video.shape[0]
-            
-            # Check if video has enough frames
-            if num_frames < self.frames_to_sample:
-                # If video is too short, repeat the last frame
-                padding_needed = self.frames_to_sample - num_frames
-                last_frame = video[-1:].repeat(padding_needed, 1, 1, 1)
-                video = torch.cat([video, last_frame], dim=0)
-                num_frames = video.shape[0]
-            
-            # Randomly sample consecutive frames
-            max_start = num_frames - self.frames_to_sample
-            if max_start < 0:
-                start_frame = 0
-            else:
-                start_frame = random.randint(0, max_start)
-            
-            # Extract consecutive frames
-            sampled_frames = video[start_frame:start_frame + self.frames_to_sample]
-            
-            # Temporal downsampling with stride
-            downsampled_frames = sampled_frames[::self.temporal_stride]
-            
-            # Convert from [T, H, W, C] to [C, T, H, W]
-            video_tensor = downsampled_frames.permute(3, 0, 1, 2).float()
-            
-            # Check if video_tensor is empty before calling max()
-            if video_tensor.numel() == 0:
-                # Format parent_idx for error message
-                idx_str = str(idx.index) if hasattr(idx, 'index') else str(idx)
-                raise ValueError(f"Video at index {idx_str} resulted in empty tensor after processing")
-            
-            # Normalize to [0, 1] if not already (read_video returns uint8 [0, 255])
-            max_val = video_tensor.max().item() if video_tensor.numel() > 0 else 0.0
-            if max_val > 1.0:
-                video_tensor = video_tensor / 255.0
-            
-            # Apply transform if provided (for masking, normalization, etc.)
-            if self.transform is not None:
-                video_tensor, mask = self.transform(video_tensor)
-                return video_tensor, mask
+        data = super().__getitem__(idx)
+        video = data['video']
 
-            # Return video and None mask (mask will be generated elsewhere)
-            return video_tensor, None
-        except Exception as e:
-            idx_str = str(idx) if not hasattr(idx, 'index') else str(idx.index)
-            warnings.warn(f"Error loading optimized video at index {idx_str}: {e}. Using next index.")
-            return self.__next__()
+        num_frames = video.shape[0]
         
+        # Check if video has enough frames
+        if num_frames < self.frames_to_sample:
+            # If video is too short, repeat the last frame
+            padding_needed = self.frames_to_sample - num_frames
+            last_frame = video[-1:].repeat(padding_needed, 1, 1, 1)
+            video = torch.cat([video, last_frame], dim=0)
+            num_frames = video.shape[0]
+        
+        # Randomly sample consecutive frames
+        max_start = num_frames - self.frames_to_sample
+        if max_start < 0:
+            start_frame = 0
+        else:
+            start_frame = random.randint(0, max_start)
+        
+        # Extract consecutive frames
+        sampled_frames = video[start_frame:start_frame + self.frames_to_sample]
+        
+        # Temporal downsampling with stride
+        downsampled_frames = sampled_frames[::self.temporal_stride]
+        
+        # Convert from [T, H, W, C] to [C, T, H, W]
+        video_tensor = downsampled_frames.permute(3, 0, 1, 2).float()
+        
+        # Normalize to [0, 1] if not already (read_video returns uint8 [0, 255])
+        max_val = video_tensor.max().item() if video_tensor.numel() > 0 else 0.0
+        if max_val > 1.0:
+            video_tensor = video_tensor / 255.0
+        
+        # Apply transform if provided (for masking, normalization, etc.)
+        if self.transform is not None:
+            video_tensor, mask = self.transform(video_tensor)
+            return video_tensor, mask
+
+        # Return video and None mask (mask will be generated elsewhere)
+        return video_tensor, None
+    
 
