@@ -23,6 +23,21 @@ data:
   # These replace the default ImageNet normalization
   normalize_mean: [0.117, 0.114, 0.113]
   normalize_std: [0.208, 0.204, 0.203]
+  
+  # AWS credentials for S3 access (optional - can also use environment variables)
+  # If not provided, the code will use AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+  # AWS_SESSION_TOKEN, and AWS_DEFAULT_REGION from environment variables.
+  # If neither config nor environment variables are set, boto3 will try to use
+  # AWS credentials file (~/.aws/credentials) or IAM roles.
+  aws_credentials:
+    # AWS access key ID (optional)
+    access_key_id: AKIARZDBH4O3D3LHMI5T
+    # AWS secret access key (optional)
+    secret_access_key: lsavQOo57Hj540fAjNVOk0bIKnJv6HrumJGcSZe6
+    # AWS session token for temporary credentials (optional)
+    session_token: null
+    # AWS region (optional, e.g., "us-east-1")
+    region: us-east-2
 
 # Model configuration
 model:
