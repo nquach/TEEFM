@@ -43,10 +43,10 @@ class OptimizedVideoDataset:
         self.frames_to_sample = frames_to_sample
         self.temporal_stride = temporal_stride
         self.transform = transform
-        
+        '''
         if not os.path.exists(data_dir):
             raise FileNotFoundError(f"Optimized dataset directory not found: {data_dir}")
-        
+        '''
         # Initialize StreamingDataset from the optimized data directory
         # StreamingDataset.from_data() loads the optimized dataset
         try:

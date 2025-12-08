@@ -50,10 +50,10 @@ class CustomVideoDataset(Dataset):
         self.transform = transform
         
         # Read video paths from CSV file
-        '''
+        
         if not os.path.exists(csv_file):
             raise FileNotFoundError(f"CSV file not found: {csv_file}")
-        '''
+        
         
         with open(csv_file, 'r') as f:
             # Read all lines and strip whitespace
