@@ -22,17 +22,13 @@ class OptimizedVideoDataset:
     but uses the optimized data format for faster loading.
     
     Args:
-        data_dir (str): Path to the optimized dataset directory (can be S3 path like s3://bucket/path)
+        data_dir (str): Path to the optimized dataset directory
         frames_to_sample (int): Number of consecutive frames to sample (default: 32)
         temporal_stride (int): Stride for temporal downsampling (default: 2)
         subset_ratio (float, optional): Ratio of dataset to use (0 < ratio <= 1).
                                        If None, uses full dataset.
         seed (int, optional): Random seed for subset sampling reproducibility
         transform (callable, optional): Optional transform to apply to video frames
-        aws_access_key_id (str, optional): AWS access key ID for S3 access. If None, uses environment variable.
-        aws_secret_access_key (str, optional): AWS secret access key for S3 access. If None, uses environment variable.
-        aws_session_token (str, optional): AWS session token for temporary credentials. If None, uses environment variable.
-        aws_region (str, optional): AWS region for S3 access. If None, uses environment variable or default.
     """
     
     def __init__(
@@ -42,25 +38,15 @@ class OptimizedVideoDataset:
         temporal_stride=2,
         subset_ratio=None,
         seed=None,
-        transform=None,
-        aws_access_key_id=None,
-        aws_secret_access_key=None,
-        aws_session_token=None,
-        aws_region=None
+        transform=None
     ):
         self.frames_to_sample = frames_to_sample
         self.temporal_stride = temporal_stride
         self.transform = transform
-        
-        # Set up AWS credentials for S3 access if provided
-        # litdata uses boto3 which reads from environment variables
-        self._setup_aws_credentials(
-            aws_access_key_id,
-            aws_secret_access_key,
-            aws_session_token,
-            aws_region
-        )
-        
+        '''
+        if not os.path.exists(data_dir):
+            raise FileNotFoundError(f"Optimized dataset directory not found: {data_dir}")
+        '''
         # Initialize StreamingDataset from the optimized data directory
         # StreamingDataset.from_data() loads the optimized dataset
         try:
@@ -74,8 +60,7 @@ class OptimizedVideoDataset:
                 raise RuntimeError(
                     f"Failed to initialize StreamingDataset from {data_dir}. "
                     f"Tried from_data() and direct initialization. "
-                    f"Errors: {e}, {e2}\n"
-                    f"Note: If using S3, ensure AWS credentials are set via config or environment variables."
+                    f"Errors: {e}, {e2}"
                 )
         
         # Get the number of items in the dataset
@@ -98,40 +83,6 @@ class OptimizedVideoDataset:
             self._subset_indices = None
         
         print(f"Loaded optimized dataset from {data_dir} with {self._dataset_size} items")
-    
-    def _setup_aws_credentials(self, access_key_id, secret_access_key, session_token, region):
-        """
-        Set up AWS credentials as environment variables for boto3/litdata to use.
-        
-        If credentials are provided in config, they will be set as environment variables.
-        If not provided, boto3 will use existing environment variables or AWS credentials file.
-        
-        Priority order:
-        1. Config parameters (if provided)
-        2. Environment variables (if config not provided)
-        3. AWS credentials file (~/.aws/credentials)
-        4. IAM roles (if running on EC2)
-        
-        Args:
-            access_key_id (str, optional): AWS access key ID from config
-            secret_access_key (str, optional): AWS secret access key from config
-            session_token (str, optional): AWS session token for temporary credentials from config
-            region (str, optional): AWS region from config
-        """
-        # Set credentials from config if provided (config takes precedence)
-        if access_key_id is not None:
-            os.environ['AWS_ACCESS_KEY_ID'] = access_key_id
-        
-        if secret_access_key is not None:
-            os.environ['AWS_SECRET_ACCESS_KEY'] = secret_access_key
-        
-        if session_token is not None:
-            os.environ['AWS_SESSION_TOKEN'] = session_token
-        
-        if region is not None:
-            os.environ['AWS_DEFAULT_REGION'] = region
-            # Also set AWS_REGION (some tools use this instead of AWS_DEFAULT_REGION)
-            os.environ['AWS_REGION'] = region
     
     def __len__(self):
         """Return the number of videos in the dataset."""

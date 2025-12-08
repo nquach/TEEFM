@@ -113,13 +113,6 @@ def create_datasets(config):
         
         print("Using optimized litdata datasets")
         
-        # Get AWS credentials from config (optional, can also use environment variables)
-        aws_config = data_config.get('aws_credentials', {})
-        aws_access_key_id = aws_config.get('access_key_id')
-        aws_secret_access_key = aws_config.get('secret_access_key')
-        aws_session_token = aws_config.get('session_token')
-        aws_region = aws_config.get('region')
-        
         # Create training dataset from optimized data
         train_dataset = OptimizedVideoDataset(
             data_dir=train_data_dir,
@@ -127,11 +120,7 @@ def create_datasets(config):
             temporal_stride=training_config.get('temporal_stride', 2),
             subset_ratio=data_config.get('subset_ratio'),
             seed=training_config.get('seed', 0),
-            transform=transform,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region=aws_region
+            transform=transform
         )
         
         # Create validation dataset from optimized data
@@ -141,11 +130,7 @@ def create_datasets(config):
             temporal_stride=training_config.get('temporal_stride', 2),
             subset_ratio=None,  # Always use full validation set
             seed=training_config.get('seed', 0),
-            transform=transform,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region=aws_region
+            transform=transform
         )
     else:
         # Use regular CSV-based datasets
