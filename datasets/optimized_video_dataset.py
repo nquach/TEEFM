@@ -42,8 +42,22 @@ class OptimizedVideoDataset(StreamingDataset):
         seed=None,
         transform=None
     ):
+        # Set up per-process cache directory for multi-GPU setups
+        # This prevents race conditions when multiple processes try to delete the same chunks
+        rank = int(os.environ.get('LOCAL_RANK', os.environ.get('RANK', 0)))
+        
+        # Only set cache directory if not already set (allows user override)
+        if 'LITDATA_CACHE_DIR' not in os.environ:
+            # Use a per-process cache directory to avoid conflicts
+            cache_base = os.environ.get('HOME', '/tmp')
+            process_cache = os.path.join(cache_base, f'.litdata_cache_rank_{rank}')
+            os.environ['LITDATA_CACHE_DIR'] = process_cache
+            os.makedirs(process_cache, exist_ok=True)
+            print(f"Using per-process cache directory: {process_cache} (rank {rank})")
+        
         # Initialize parent StreamingDataset class
         # StreamingDataset is initialized with data_dir
+        # Pass transform=None to prevent parent from applying transform to raw dict
         try:
             super().__init__(data_dir, transform=None)
         except Exception as e:
