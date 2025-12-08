@@ -65,9 +65,9 @@ model:
 # Training configuration
 training:
   # Batch size per GPU
-  batch_size: 200
+  batch_size: 64
   # Number of data loading workers
-  num_workers: 30
+  num_workers: 8
   # Maximum number of training epochs
   max_epochs: 200
   # Whether to pin memory in DataLoader (faster GPU transfer)
