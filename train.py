@@ -120,7 +120,8 @@ def create_datasets(config):
             temporal_stride=training_config.get('temporal_stride', 2),
             subset_ratio=data_config.get('subset_ratio'),
             seed=training_config.get('seed', 0),
-            transform=transform
+            transform=transform,
+            cache_dir=data_config.get('cache_dir')
         )
         
         # Create validation dataset from optimized data
@@ -130,7 +131,8 @@ def create_datasets(config):
             temporal_stride=training_config.get('temporal_stride', 2),
             subset_ratio=None,  # Always use full validation set
             seed=training_config.get('seed', 0),
-            transform=transform
+            transform=transform,
+            cache_dir=data_config.get('cache_dir')
         )
     else:
         # Use regular CSV-based datasets

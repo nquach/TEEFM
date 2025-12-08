@@ -10,6 +10,8 @@ data:
   train_optimized_dir: 's3://tee-2023-2024/opt_mp4-2023-2024_compressed'
   # Path to optimized validation dataset directory (only used if use_optimized is true)
   val_optimized_dir: 's3://tee-2023-2024/opt_mp4-2023-2024_compressed'
+  # Path to cache directory for optimized datasets
+  cache_dir: "./output/cache"
   # Path to CSV file containing training video paths (one path per line)
   # Only used if use_optimized is false
   train_csv: "mp4_paths.csv"

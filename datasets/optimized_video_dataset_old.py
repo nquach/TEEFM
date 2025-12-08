@@ -12,6 +12,7 @@ import warnings
 import torch
 from litdata import StreamingDataset, StreamingDataLoader
 import numpy as np
+from litdata.streaming.cache import Dir
 
 
 class OptimizedVideoDataset(StreamingDataset):
@@ -40,12 +41,13 @@ class OptimizedVideoDataset(StreamingDataset):
         temporal_stride=2,
         subset_ratio=None,
         seed=None,
-        transform=None
+        transform=None,
+        cache_dir=None
     ):
         # Initialize parent StreamingDataset class
         # StreamingDataset is initialized with data_dir
         try:
-            super().__init__(data_dir)
+            super().__init__(input_dir=Dir(path=cache_dir, url=data_dir))
         except Exception as e:
             raise RuntimeError(
                 f"Failed to initialize StreamingDataset from {data_dir}. "
