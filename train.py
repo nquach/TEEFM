@@ -123,7 +123,7 @@ def create_datasets(config):
             transform=transform,
             cache_dir=data_config.get('cache_dir'),
         )
-        
+        print(f'Created optimized training dataset from {train_data_dir} of length {len(train_dataset)}')
         # Create validation dataset from optimized data
         val_dataset = OptimizedVideoDataset(
             data_dir=val_data_dir,
@@ -134,6 +134,7 @@ def create_datasets(config):
             transform=transform,
             cache_dir=data_config.get('cache_dir')
         )
+        print(f'Created optimized validation dataset from {val_data_dir} of length {len(val_dataset)}')
     else:
         # Use regular CSV-based datasets
         print("Using regular CSV-based datasets")
