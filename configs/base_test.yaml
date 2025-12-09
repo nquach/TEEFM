@@ -9,7 +9,7 @@ data:
   # Path to optimized training dataset directory (only used if use_optimized is true)
   train_optimized_dir: 's3://tee-2023-2024/opt_mp4-2023-2024_compressed'
   # Path to optimized validation dataset directory (only used if use_optimized is true)
-  val_optimized_dir: 's3://tee-2023-2024/opt_mp4-2023-2024_compressed'
+  val_optimized_dir: 's3://tee-2023-2024/opt_val1k_mp4-2023-2024_compressed'
   # Path to cache directory for optimized datasets
   cache_dir: "./output/cache"
   # Path to CSV file containing training video paths (one path per line)
@@ -67,7 +67,8 @@ training:
   temporal_stride: 2
   # Number of consecutive frames to sample before downsampling
   frames_to_sample: 32
-
+  # Check validation every N epochs
+  check_val_every_n_epoch: 1
 # Optimizer configuration (Schedule-Free Optimizers)
 optimizer:
   # Optimizer type: "adamw" (AdamWScheduleFree) or "radam" (RAdamScheduleFree)
