@@ -13,6 +13,7 @@ data:
   # Path to cache directory for optimized datasets
   cache_dir: "./output/cache"
   # Path to CSV file containing training video paths (one path per line)
+  val_cache_dir: "./output/val_cache"
   # Only used if use_optimized is false
   train_csv: "mp4_paths.csv"
   # Path to CSV file containing validation video paths (one path per line)

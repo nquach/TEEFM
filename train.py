@@ -121,7 +121,7 @@ def create_datasets(config):
             subset_ratio=None,  # Always use full validation set
             seed=training_config.get('seed', 0),
             transform=transform,
-            cache_dir=data_config.get('cache_dir')
+            cache_dir=data_config.get('val_cache_dir')
         )
         print(f'Created optimized validation dataset from {val_data_dir} of length {len(val_dataset)}')
         train_dataset = OptimizedVideoDataset(
