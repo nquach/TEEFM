@@ -122,7 +122,6 @@ def create_datasets(config):
             seed=training_config.get('seed', 0),
             transform=transform,
             cache_dir=data_config.get('cache_dir'),
-            subset_ratio=data_config.get('subset_ratio', 1.0)
         )
         
         # Create validation dataset from optimized data
