@@ -41,7 +41,6 @@ class OptimizedVideoDataset(StreamingDataset):
         subset_ratio=None,
         seed=None,
         transform=None,
-        subset_ratio=None,
         cache_dir=None
     ):
         # Initialize parent StreamingDataset class
