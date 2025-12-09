@@ -114,6 +114,16 @@ def create_datasets(config):
         print("Using optimized litdata datasets")
         
         # Create training dataset from optimized data
+        val_dataset = OptimizedVideoDataset(
+            data_dir=val_data_dir,
+            frames_to_sample=training_config.get('frames_to_sample', 32),
+            temporal_stride=training_config.get('temporal_stride', 2),
+            subset_ratio=None,  # Always use full validation set
+            seed=training_config.get('seed', 0),
+            transform=transform,
+            cache_dir=data_config.get('cache_dir')
+        )
+        print(f'Created optimized validation dataset from {val_data_dir} of length {len(val_dataset)}')
         train_dataset = OptimizedVideoDataset(
             data_dir=train_data_dir,
             frames_to_sample=training_config.get('frames_to_sample', 32),
@@ -125,16 +135,7 @@ def create_datasets(config):
         )
         print(f'Created optimized training dataset from {train_data_dir} of length {len(train_dataset)}')
         # Create validation dataset from optimized data
-        val_dataset = OptimizedVideoDataset(
-            data_dir=val_data_dir,
-            frames_to_sample=training_config.get('frames_to_sample', 32),
-            temporal_stride=training_config.get('temporal_stride', 2),
-            subset_ratio=None,  # Always use full validation set
-            seed=training_config.get('seed', 0),
-            transform=transform,
-            cache_dir=data_config.get('cache_dir')
-        )
-        print(f'Created optimized validation dataset from {val_data_dir} of length {len(val_dataset)}')
+       
     else:
         # Use regular CSV-based datasets
         print("Using regular CSV-based datasets")
