@@ -48,7 +48,61 @@ def load_config(config_path):
     return config
 
 
-def create_datasets(config):
+def setup_litdata_cache_dirs(config):
+    """
+    Setup unique cache directories per process to prevent race conditions in multi-GPU training.
+    
+    Each process (rank) gets its own cache directory using format: {base_dir}_rank{rank}_pid{pid}
+    This prevents FileNotFoundError when multiple processes try to download/decompress chunks simultaneously.
+    
+    Args:
+        config (dict): Configuration dictionary containing cache directory paths
+    
+    Returns:
+        tuple: (train_cache_dir, val_cache_dir) - Unique cache directories for this process
+    """
+    data_config = config.get('data', {})
+    
+    # Get base cache directories from config
+    base_train_cache = data_config.get('cache_dir', './output/cache')
+    base_val_cache = data_config.get('val_cache_dir', './output/val_cache')
+    
+    # Detect process rank for multi-GPU training
+    # PyTorch Lightning sets LOCAL_RANK and RANK environment variables before spawning processes
+    # Try environment variables first (most reliable for PyTorch Lightning DDP)
+    rank_str = os.environ.get('LOCAL_RANK') or os.environ.get('RANK', '0')
+    try:
+        rank = int(rank_str)
+    except (ValueError, TypeError):
+        # Fall back to torch.distributed if available and initialized
+        try:
+            if hasattr(torch, 'distributed') and torch.distributed.is_initialized():
+                rank = torch.distributed.get_rank()
+            else:
+                rank = 0
+        except (AttributeError, RuntimeError):
+            # Single GPU or distributed not available
+            rank = 0
+    
+    # Get process ID for additional uniqueness
+    pid = os.getpid()
+    
+    # Create unique cache directories
+    train_cache_dir = f"{base_train_cache}_rank{rank}_pid{pid}"
+    val_cache_dir = f"{base_val_cache}_rank{rank}_pid{pid}"
+    
+    # Create cache directories with proper permissions
+    os.makedirs(train_cache_dir, exist_ok=True)
+    os.makedirs(val_cache_dir, exist_ok=True)
+    
+    print(f"Process rank {rank}, PID {pid}: Using cache directories:")
+    print(f"  Train cache: {train_cache_dir}")
+    print(f"  Val cache: {val_cache_dir}")
+    
+    return train_cache_dir, val_cache_dir
+
+
+def create_datasets(config, train_cache_dir=None, val_cache_dir=None):
     """
     Create training and validation datasets.
     
@@ -56,6 +110,8 @@ def create_datasets(config):
     
     Args:
         config (dict): Configuration dictionary
+        train_cache_dir (str, optional): Unique cache directory for training dataset (for multi-GPU)
+        val_cache_dir (str, optional): Unique cache directory for validation dataset (for multi-GPU)
     
     Returns:
         tuple: (train_dataset, val_dataset, use_optimized)
@@ -113,7 +169,11 @@ def create_datasets(config):
         
         print("Using optimized litdata datasets")
         
-        # Create training dataset from optimized data
+        # Use unique cache directories if provided (for multi-GPU), otherwise use config values
+        train_cache = train_cache_dir if train_cache_dir is not None else data_config.get('cache_dir')
+        val_cache = val_cache_dir if val_cache_dir is not None else data_config.get('val_cache_dir')
+        
+        # Create validation dataset from optimized data
         val_dataset = OptimizedVideoDataset(
             data_dir=val_data_dir,
             frames_to_sample=training_config.get('frames_to_sample', 32),
@@ -121,9 +181,11 @@ def create_datasets(config):
             subset_ratio=None,  # Always use full validation set
             seed=training_config.get('seed', 0),
             transform=transform,
-            cache_dir=data_config.get('val_cache_dir')
+            cache_dir=val_cache
         )
         print(f'Created optimized validation dataset from {val_data_dir} of length {len(val_dataset)}')
+        
+        # Create training dataset from optimized data
         train_dataset = OptimizedVideoDataset(
             data_dir=train_data_dir,
             frames_to_sample=training_config.get('frames_to_sample', 32),
@@ -131,10 +193,9 @@ def create_datasets(config):
             subset_ratio=data_config.get('subset_ratio'),
             seed=training_config.get('seed', 0),
             transform=transform,
-            cache_dir=data_config.get('cache_dir'),
+            cache_dir=train_cache,
         )
         print(f'Created optimized training dataset from {train_data_dir} of length {len(train_dataset)}')
-        # Create validation dataset from optimized data
        
     else:
         # Use regular CSV-based datasets
@@ -255,9 +316,20 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
     
+    # Setup unique cache directories for multi-GPU training (if using optimized datasets)
+    # This prevents race conditions when multiple processes download/decompress chunks
+    train_cache_dir = None
+    val_cache_dir = None
+    if config.get('data', {}).get('use_optimized', False):
+        train_cache_dir, val_cache_dir = setup_litdata_cache_dirs(config)
+    
     # Create datasets
     print("Creating datasets...")
-    train_dataset, val_dataset, use_optimized = create_datasets(config)
+    train_dataset, val_dataset, use_optimized = create_datasets(
+        config, 
+        train_cache_dir=train_cache_dir, 
+        val_cache_dir=val_cache_dir
+    )
     print(f"Training dataset size: {len(train_dataset)}")
     print(f"Validation dataset size: {len(val_dataset)}")
     
