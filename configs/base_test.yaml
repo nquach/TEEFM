@@ -70,6 +70,8 @@ training:
   frames_to_sample: 32
   # Check validation every N epochs
   check_val_every_n_epoch: 1
+  # Gradient clip value
+  gradient_clip_val: 0
 # Optimizer configuration (Schedule-Free Optimizers)
 optimizer:
   # Optimizer type: "adamw" (AdamWScheduleFree) or "radam" (RAdamScheduleFree)

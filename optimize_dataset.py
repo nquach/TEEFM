@@ -31,8 +31,9 @@ def is_mp4_corrupted(filepath):
 		return True
 
 def get_video_tensor(file_path):
-	video, _, info = read_video(file_path, pts_unit='sec')
-	return {"path": file_path, "video": video}
+	if not is_mp4_corrupted(file_path):
+		video, _, info = read_video(file_path, pts_unit='sec')
+		yield {"path": file_path, "video": video}
 
 
 def optimize_dataset(csv_path, dataset_dir, num_workers=8, chunk_bytes='64MB'):
@@ -55,7 +56,7 @@ if __name__ == '__main__':
 	#csv_path2 = '/teamspace/studios/this_studio/TEEFM/val500_2023-2024.csv'
 	csv_path2 = '/share/pi/krhee/nquach/TEE_foundation/csv_files/val_2023-2024-carina.csv'
 	#output_dir1 = '/teamspace/studios/this_studio/opt_mp4-2014-2023'
-	output_dir1 = '/share/pi/krhee/nquach/TEE_foundation/opt_mp4-2014-2023_compressed'
+	output_dir1 = '/share/pi/krhee/nquach/TEE_foundation/opt_mp4-2014-2023_compressed_v2'
 	#output_dir2 = '/teamspace/studios/this_studio/opt_mp4-2023-2024_val500'
 	output_dir2 = '/share/pi/krhee/nquach/TEE_foundation/opt_mp4-2023-2024'
 	#safe_makedir(output_dir1)
