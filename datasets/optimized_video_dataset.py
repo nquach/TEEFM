@@ -41,12 +41,16 @@ class OptimizedVideoDataset(StreamingDataset):
         subset_ratio=None,
         seed=None,
         transform=None,
+        subset_ratio=None,
         cache_dir=None
     ):
         # Initialize parent StreamingDataset class
         # StreamingDataset is initialized with data_dir
         try:
-            super().__init__(input_dir=Dir(path=cache_dir, url=data_dir), transform=None)
+            if subset_ratio is not None:
+                super().__init__(input_dir=Dir(path=cache_dir, url=data_dir), transform=None, subsample=subset_ratio)
+            else:
+                super().__init__(input_dir=Dir(path=cache_dir, url=data_dir), transform=None)
         except Exception as e:
             raise RuntimeError(
                 f"Failed to initialize StreamingDataset from {data_dir}. "
@@ -57,10 +61,6 @@ class OptimizedVideoDataset(StreamingDataset):
         self.frames_to_sample = frames_to_sample
         self.temporal_stride = temporal_stride
         self.custom_transform = transform 
-        
-        # Apply subset sampling if specified
-        if subset_ratio is not None:
-            print(f'WARNING litdata is enabled! Does not support dataset subsetting, but subset_ratio is set as {subset_ratio}')
         
         print(f"Loaded optimized dataset from {data_dir}")
     

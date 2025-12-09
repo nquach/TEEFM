@@ -16,3 +16,4 @@ litdata
 optuna
 plotly
 kaleido
+zstd

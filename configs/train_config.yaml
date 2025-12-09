@@ -50,7 +50,7 @@ model:
 # Training configuration
 training:
   # Batch size per GPU
-  batch_size: 64
+  batch_size: 32
   # Number of data loading workers
   num_workers: 10
   # Maximum number of training epochs
