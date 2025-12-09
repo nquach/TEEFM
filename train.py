@@ -191,7 +191,7 @@ def create_data_loaders(train_dataset, val_dataset, config, use_optimized=False)
             shuffle=True,
             num_workers=training_config.get('num_workers', 10),
             pin_memory=training_config.get('pin_memory', True),
-            drop_last=True  # Drop last incomplete batch,
+            drop_last=False  # Drop last incomplete batch,
         )
         
         val_loader = StreamingDataLoader(
