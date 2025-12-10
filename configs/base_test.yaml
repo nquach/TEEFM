@@ -21,7 +21,7 @@ data:
   val_csv: "val500_2023-2024.csv"
   # Optional: Use a random subset of the training dataset (null to use full dataset)
   # Value should be a float between 0 and 1, e.g., 0.1 for 10% of the dataset
-  subset_ratio: 0.1
+  subset_ratio: 0.5
   # Custom normalization values for the dataset
   # These replace the default ImageNet normalization
   normalize_mean: [0.117, 0.114, 0.113]
