@@ -90,8 +90,8 @@ class OptimizedVideoDataset(StreamingDataset):
 
         # Load data from parent StreamingDataset with error handling and retry logic
         # The optimized dataset returns a dict with "path" and "video" keys
-        # Retry on ValueError (corrupted chunk error) up to max_retries times
-        # Handles both offset unpacking errors and deserialization errors
+        # Retry on ValueError and RuntimeError (corrupted chunk errors) up to max_retries times
+        # Handles offset unpacking errors, deserialization errors, and tensor shape errors
         data = None
         last_error = None
         
@@ -120,6 +120,27 @@ class OptimizedVideoDataset(StreamingDataset):
                         ) from e
                 else:
                     # Different ValueError, re-raise immediately
+                    raise
+            except RuntimeError as e:
+                # Check if this is a tensor deserialization error (shape mismatch)
+                error_msg = str(e)
+                is_shape_error = "shape" in error_msg and ("invalid for input" in error_msg or "reshape" in error_msg)
+                
+                if is_shape_error:
+                    last_error = e
+                    if attempt < self.max_retries - 1:
+                        # Wait a bit before retrying to allow cache to be updated
+                        time.sleep(self.retry_delay * (attempt + 1))
+                        continue
+                    else:
+                        # Max retries reached, raise with informative error
+                        raise RuntimeError(
+                            f"Failed to load data at index {idx} after {self.max_retries} retries. "
+                            f"This may indicate a corrupted chunk in the cache (tensor shape mismatch). "
+                            f"Original error: {error_msg}"
+                        ) from e
+                else:
+                    # Different RuntimeError, re-raise immediately
                     raise
             except Exception as e:
                 # Other exceptions, re-raise immediately
