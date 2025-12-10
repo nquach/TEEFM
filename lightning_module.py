@@ -244,6 +244,7 @@ class VideoMAELightningModule(pl.LightningModule):
         Returns:
             torch.Tensor: Loss value
         """
+        print(f'DEBUGGING STATEMENT: Validation step {batch_idx}')
         videos, bool_masked_pos = batch
         
         # Handle mask based on mask type

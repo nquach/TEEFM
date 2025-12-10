@@ -225,7 +225,7 @@ def create_datasets(config, train_cache_dir=None, val_cache_dir=None):
             subset_ratio=None,  # Always use full validation set
             seed=training_config.get('seed', 0),
             transform=transform,
-            custom_drop_last=False
+            custom_drop_last=True
         )
     
     return train_dataset, val_dataset, use_optimized
@@ -370,8 +370,9 @@ def main():
             monitor=checkpoint_config.get('monitor', 'val_loss'),
             mode='min',  # Minimize validation loss
             save_top_k=checkpoint_config.get('save_top_k', 3),
-            save_last=True,  # Always save last checkpoint
-            verbose=True
+            save_last=False,  # Always save last checkpoint
+            verbose=True,
+            every_n_epochs=1
         )
         print(f"Checkpoint saving enabled. Checkpoints will be saved to: {checkpoint_dir}")
     else:
@@ -397,7 +398,7 @@ def main():
     # Create trainer
     trainer = pl.Trainer(
         max_epochs=config['training']['max_epochs'],
-        accelerator='gpu' if torch.cuda.is_available() else 'cpu',
+        accelerator='auto' if torch.cuda.is_available() else 'cpu',
         devices='auto',  # Use all available GPUs
         strategy='ddp' if torch.cuda.device_count() > 1 else 'auto',
         callbacks=callbacks_list if callbacks_list else None,
