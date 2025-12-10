@@ -48,31 +48,6 @@ def load_config(config_path):
     return config
 
 
-def get_process_rank():
-    """
-    Get the current process rank for distributed training.
-    
-    Returns:
-        int: Process rank (0 for main process, 1+ for other processes in DDP)
-    """
-    # PyTorch Lightning sets LOCAL_RANK and RANK environment variables before spawning processes
-    # Try environment variables first (most reliable for PyTorch Lightning DDP)
-    rank_str = os.environ.get('LOCAL_RANK') or os.environ.get('RANK', '0')
-    try:
-        rank = int(rank_str)
-    except (ValueError, TypeError):
-        # Fall back to torch.distributed if available and initialized
-        try:
-            if hasattr(torch, 'distributed') and torch.distributed.is_initialized():
-                rank = torch.distributed.get_rank()
-            else:
-                rank = 0
-        except (AttributeError, RuntimeError):
-            # Single GPU or distributed not available
-            rank = 0
-    return rank
-
-
 def setup_litdata_cache_dirs(config):
     """
     Setup unique cache directories per process to prevent race conditions in multi-GPU training.
@@ -93,7 +68,21 @@ def setup_litdata_cache_dirs(config):
     base_val_cache = data_config.get('val_cache_dir', './output/val_cache')
     
     # Detect process rank for multi-GPU training
-    rank = get_process_rank()
+    # PyTorch Lightning sets LOCAL_RANK and RANK environment variables before spawning processes
+    # Try environment variables first (most reliable for PyTorch Lightning DDP)
+    rank_str = os.environ.get('LOCAL_RANK') or os.environ.get('RANK', '0')
+    try:
+        rank = int(rank_str)
+    except (ValueError, TypeError):
+        # Fall back to torch.distributed if available and initialized
+        try:
+            if hasattr(torch, 'distributed') and torch.distributed.is_initialized():
+                rank = torch.distributed.get_rank()
+            else:
+                rank = 0
+        except (AttributeError, RuntimeError):
+            # Single GPU or distributed not available
+            rank = 0
     
     # Get process ID for additional uniqueness
     pid = os.getpid()
@@ -364,32 +353,22 @@ def main():
     
     checkpoint_callback = None
     if checkpoint_enabled:
-        # Get process rank to determine if we should enable checkpointing
-        # In DDP, only rank 0 should save checkpoints to avoid synchronization issues
-        rank = get_process_rank()
+        checkpoint_dir = checkpoint_config['dir']
+        checkpoint_prefix = checkpoint_config['prefix']
         
-        if rank == 0:
-            # Only create checkpoint callback on rank 0 to avoid DDP broadcast issues
-            checkpoint_dir = checkpoint_config['dir']
-            checkpoint_prefix = checkpoint_config['prefix']
-            
-            # Create checkpoint directory
-            os.makedirs(checkpoint_dir, exist_ok=True)
-            
-            checkpoint_callback = ModelCheckpoint(
-                dirpath=checkpoint_dir,
-                filename=f"{checkpoint_prefix}-{{epoch:02d}}-{{val_loss:.4f}}",
-                monitor=checkpoint_config.get('monitor', 'val_loss'),
-                mode='min',  # Minimize validation loss
-                save_top_k=checkpoint_config.get('save_top_k', 3),
-                save_last=True,  # Always save last checkpoint
-                save_on_train_epoch_end=False,  # Only save after validation, not during training epochs
-                # This prevents the DDP broadcast OOM error that occurs in on_train_epoch_end
-                verbose=True
-            )
-            print(f"Checkpoint saving enabled on rank 0. Checkpoints will be saved to: {checkpoint_dir}")
-        else:
-            print(f"Checkpoint saving disabled on rank {rank} (only rank 0 saves checkpoints in DDP)")
+        # Create checkpoint directory
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        checkpoint_callback = ModelCheckpoint(
+            dirpath=checkpoint_dir,
+            filename=f"{checkpoint_prefix}-{{epoch:02d}}-{{val_loss:.4f}}",
+            monitor=checkpoint_config.get('monitor', 'val_loss'),
+            mode='min',  # Minimize validation loss
+            save_top_k=checkpoint_config.get('save_top_k', 3),
+            save_last=True,  # Always save last checkpoint
+            verbose=True
+        )
+        print(f"Checkpoint saving enabled. Checkpoints will be saved to: {checkpoint_dir}")
     else:
         print("Checkpoint saving disabled. No model weights will be saved.")
     
