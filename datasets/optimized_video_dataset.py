@@ -41,16 +41,15 @@ class OptimizedVideoDataset(StreamingDataset):
         subset_ratio=None,
         seed=None,
         transform=None,
-        cache_dir=None,
-        custom_max_cache_size='80GB'
+        cache_dir=None
     ):
         # Initialize parent StreamingDataset class
         # StreamingDataset is initialized with data_dir
         try:
             if subset_ratio is not None:
-                super().__init__(input_dir=Dir(path=cache_dir, url=data_dir), transform=None, subsample=subset_ratio, max_cache_size=custom_max_cache_size)
+                super().__init__(input_dir=Dir(path=cache_dir, url=data_dir), transform=None, subsample=subset_ratio)
             else:
-                super().__init__(input_dir=Dir(path=cache_dir, url=data_dir), transform=None, max_cache_size=custom_max_cache_size)
+                super().__init__(input_dir=Dir(path=cache_dir, url=data_dir), transform=None)
         except Exception as e:
             raise RuntimeError(
                 f"Failed to initialize StreamingDataset from {data_dir}. "
