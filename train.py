@@ -6,12 +6,8 @@ PyTorch Lightning model, and trainer for training VideoMAE models.
 """
 
 import os
-import sys
 import yaml
 import torch
-import atexit
-import signal
-import shutil
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -32,10 +28,6 @@ except ImportError:
     StreamingDataLoader = None
     print("Warning: litdata package not found. Install with: pip install litdata")
 
-# Global list to track cache directories that need cleanup
-_cache_dirs_to_cleanup = []
-_cleanup_registered = False
-
 
 def load_config(config_path):
     """
@@ -54,63 +46,6 @@ def load_config(config_path):
         config = yaml.safe_load(f)
     
     return config
-
-
-def cleanup_cache_dirs():
-    """
-    Cleanup function to remove cache directories on script exit or termination.
-    
-    This function is registered with atexit and signal handlers to ensure cache
-    directories are cleaned up even if the script is forcefully terminated.
-    """
-    global _cache_dirs_to_cleanup
-    
-    if not _cache_dirs_to_cleanup:
-        return
-    
-    for cache_dir in _cache_dirs_to_cleanup:
-        if cache_dir and os.path.exists(cache_dir):
-            try:
-                shutil.rmtree(cache_dir)
-                print(f"Cleaned up cache directory: {cache_dir}")
-            except (OSError, PermissionError) as e:
-                # Silently handle errors (directory might be in use or already deleted)
-                # Print only in debug mode or if it's not a common error
-                if "No such file or directory" not in str(e):
-                    print(f"Warning: Could not remove cache directory {cache_dir}: {e}")
-    
-    # Clear the list after cleanup
-    _cache_dirs_to_cleanup = []
-
-
-def register_cleanup_handlers():
-    """
-    Register cleanup handlers for normal exit and signal termination.
-    
-    This ensures cache directories are cleaned up on:
-    - Normal script exit
-    - SIGTERM (termination signal)
-    - SIGINT (Ctrl+C)
-    """
-    global _cleanup_registered
-    
-    if _cleanup_registered:
-        return
-    
-    # Register cleanup for normal exit
-    atexit.register(cleanup_cache_dirs)
-    
-    # Register cleanup for signal termination
-    def signal_handler(signum, frame):
-        print(f"\nReceived signal {signum}. Cleaning up cache directories...")
-        cleanup_cache_dirs()
-        sys.exit(0)
-    
-    # Register handlers for common termination signals
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
-    
-    _cleanup_registered = True
 
 
 def setup_litdata_cache_dirs(config):
@@ -160,17 +95,9 @@ def setup_litdata_cache_dirs(config):
     os.makedirs(train_cache_dir, exist_ok=True)
     os.makedirs(val_cache_dir, exist_ok=True)
     
-    # Register cache directories for cleanup on exit
-    global _cache_dirs_to_cleanup
-    _cache_dirs_to_cleanup.extend([train_cache_dir, val_cache_dir])
-    
-    # Register cleanup handlers (only once)
-    register_cleanup_handlers()
-    
     print(f"Process rank {rank}, PID {pid}: Using cache directories:")
     print(f"  Train cache: {train_cache_dir}")
     print(f"  Val cache: {val_cache_dir}")
-    print("  (Cache directories will be cleaned up on exit)")
     
     return train_cache_dir, val_cache_dir
 
