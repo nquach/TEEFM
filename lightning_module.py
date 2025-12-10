@@ -206,12 +206,6 @@ class VideoMAELightningModule(pl.LightningModule):
         # Log training loss
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         
-        # Track gradient norm if enabled
-        if self.track_grad_norm:
-            # Compute gradient norm after backward pass
-            # We'll do this in on_after_backward hook instead
-            pass
-        
         return loss
     
     def on_after_backward(self):
@@ -300,8 +294,8 @@ class VideoMAELightningModule(pl.LightningModule):
         
         # Log validation loss
         # sync_dist=True ensures metric is aggregated across all devices in distributed training
-        #self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-        self.log('val_loss', loss, sync_dist=True, reduce_fx='mean')
+        self.log('val_loss', loss, on_step=False, on_epoch=False, prog_bar=True, logger=True, sync_dist=False)
+        #self.log('val_loss', loss, sync_dist=True, reduce_fx='mean')
         return loss
     
     def configure_optimizers(self):
