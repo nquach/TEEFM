@@ -118,7 +118,7 @@ class VideoMAELightningModule(pl.LightningModule):
         if self._optimizer is not None and hasattr(self._optimizer, 'eval'):
             self._optimizer.eval()
     
-    def on_before_optimizer_step(self, trainer, optimizer):
+    def on_before_optimizer_step(self, optimizer):
         """
         Called before each optimizer step.
         
@@ -126,7 +126,6 @@ class VideoMAELightningModule(pl.LightningModule):
         which is required for their correct operation.
         
         Args:
-            trainer: PyTorch Lightning trainer instance
             optimizer: The optimizer being stepped
         """
         # Set optimizer to training mode (required for schedule-free optimizers)
