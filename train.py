@@ -213,7 +213,8 @@ def create_datasets(config, train_cache_dir=None, val_cache_dir=None):
             temporal_stride=training_config.get('temporal_stride', 2),
             subset_ratio=data_config.get('subset_ratio'),
             seed=training_config.get('seed', 0),
-            transform=transform
+            transform=transform,
+            custom_drop_last=True
         )
         
         # Create validation dataset (no subset sampling for validation)
@@ -223,7 +224,8 @@ def create_datasets(config, train_cache_dir=None, val_cache_dir=None):
             temporal_stride=training_config.get('temporal_stride', 2),
             subset_ratio=None,  # Always use full validation set
             seed=training_config.get('seed', 0),
-            transform=transform
+            transform=transform,
+            custom_drop_last=False
         )
     
     return train_dataset, val_dataset, use_optimized
@@ -256,7 +258,7 @@ def create_data_loaders(train_dataset, val_dataset, config, use_optimized=False)
             batch_size=batch_size,
             shuffle=True,
             num_workers=training_config.get('num_workers', 10),
-            pin_memory=training_config.get('pin_memory', True),
+            pin_memory=training_config.get('pin_memory', True)
         )
         
         val_loader = StreamingDataLoader(
@@ -264,8 +266,7 @@ def create_data_loaders(train_dataset, val_dataset, config, use_optimized=False)
             batch_size=batch_size,
             shuffle=False,
             num_workers=training_config.get('num_workers', 10),
-            pin_memory=training_config.get('pin_memory', True),
-            drop_last=False  # Keep all validation samples
+            pin_memory=training_config.get('pin_memory', True)
         )
     else:
         # Use regular DataLoader
