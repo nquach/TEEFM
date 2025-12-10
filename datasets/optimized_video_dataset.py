@@ -46,7 +46,7 @@ class OptimizedVideoDataset(StreamingDataset):
         seed=None,
         transform=None,
         cache_dir=None,
-        custom_drop_last=True
+        custom_drop_last=False
     ):
         # Initialize parent StreamingDataset class
         # StreamingDataset is initialized with data_dir

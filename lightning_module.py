@@ -4,7 +4,6 @@ PyTorch Lightning Module for VideoMAE Training
 This module provides a PyTorch Lightning wrapper for the VideoMAE model,
 enabling easy multi-GPU training, checkpointing, and logging.
 """
-
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
@@ -294,7 +293,7 @@ class VideoMAELightningModule(pl.LightningModule):
         
         # Log validation loss
         # sync_dist=True ensures metric is aggregated across all devices in distributed training
-        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=False)
+        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         #self.log('val_loss', loss, sync_dist=True, reduce_fx='mean')
         return loss
     
