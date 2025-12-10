@@ -8,6 +8,7 @@ for frame sampling, temporal downsampling, and transforms.
 
 import os
 import random
+import time
 import warnings
 import torch
 from litdata import StreamingDataset, StreamingDataLoader
@@ -67,6 +68,8 @@ class OptimizedVideoDataset(StreamingDataset):
         self.frames_to_sample = frames_to_sample
         self.temporal_stride = temporal_stride
         self.custom_transform = transform 
+        self.max_retries = 3  # Maximum number of retries for corrupted chunks
+        self.retry_delay = 0.1  # Delay between retries in seconds
         
         print(f"Loaded optimized dataset from {data_dir}")
     
@@ -85,9 +88,42 @@ class OptimizedVideoDataset(StreamingDataset):
         # Extract actual index from ChunkedIndex if needed
         # StreamingDataLoader passes ChunkedIndex objects, regular DataLoader passes integers
 
-        # Load data from parent StreamingDataset
+        # Load data from parent StreamingDataset with error handling and retry logic
         # The optimized dataset returns a dict with "path" and "video" keys
-        data = super().__getitem__(idx)
+        # Retry on ValueError (corrupted chunk error) up to max_retries times
+        data = None
+        last_error = None
+        
+        for attempt in range(self.max_retries):
+            try:
+                data = super().__getitem__(idx)
+                break  # Success, exit retry loop
+            except ValueError as e:
+                # Check if this is the corrupted chunk error
+                error_msg = str(e)
+                if "not enough values to unpack" in error_msg or "expected" in error_msg:
+                    last_error = e
+                    if attempt < self.max_retries - 1:
+                        # Wait a bit before retrying to allow cache to be updated
+                        time.sleep(self.retry_delay * (attempt + 1))
+                        continue
+                    else:
+                        # Max retries reached, raise with informative error
+                        raise RuntimeError(
+                            f"Failed to load data at index {idx} after {self.max_retries} retries. "
+                            f"This may indicate a corrupted chunk in the cache. "
+                            f"Original error: {error_msg}"
+                        ) from e
+                else:
+                    # Different ValueError, re-raise immediately
+                    raise
+            except Exception as e:
+                # Other exceptions, re-raise immediately
+                raise
+        
+        if data is None:
+            raise RuntimeError(f"Failed to load data at index {idx} after {self.max_retries} retries")
+        
         video = data['video']
 
         num_frames = video.shape[0]

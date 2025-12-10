@@ -94,22 +94,28 @@ def load_config(config_path):
 
 def setup_litdata_cache_dirs(config):
     """
-    Setup unique cache directories per process to prevent race conditions in multi-GPU training.
+    Setup shared cache directories for litdata StreamingDataset in multi-GPU training.
     
-    Each process (rank) gets its own cache directory using format: {base_dir}_rank{rank}_pid{pid}
-    This prevents FileNotFoundError when multiple processes try to download/decompress chunks simultaneously.
+    Uses shared cache directories (same for all processes) instead of per-process caches.
+    Litdata's StreamingDataset has built-in synchronization mechanisms to handle concurrent
+    access safely. Only rank 0 creates the directories to avoid race conditions.
     
     Args:
         config (dict): Configuration dictionary containing cache directory paths
     
     Returns:
-        tuple: (train_cache_dir, val_cache_dir) - Unique cache directories for this process
+        tuple: (train_cache_dir, val_cache_dir) - Shared cache directories for all processes
     """
     data_config = config.get('data', {})
     
     # Get base cache directories from config
     base_train_cache = data_config.get('cache_dir', './output/cache')
     base_val_cache = data_config.get('val_cache_dir', './output/val_cache')
+    
+    # Use shared cache directories (same for all processes)
+    # Litdata handles synchronization internally
+    train_cache_dir = base_train_cache
+    val_cache_dir = base_val_cache
     
     # Detect process rank for multi-GPU training
     # PyTorch Lightning sets LOCAL_RANK and RANK environment variables before spawning processes
@@ -128,18 +134,13 @@ def setup_litdata_cache_dirs(config):
             # Single GPU or distributed not available
             rank = 0
     
-    # Get process ID for additional uniqueness
-    pid = os.getpid()
+    # Only create cache directories on rank 0 to avoid race conditions
+    # Other ranks will wait for litdata to handle synchronization
+    if rank == 0:
+        os.makedirs(train_cache_dir, exist_ok=True)
+        os.makedirs(val_cache_dir, exist_ok=True)
     
-    # Create unique cache directories
-    train_cache_dir = f"{base_train_cache}_rank{rank}_pid{pid}"
-    val_cache_dir = f"{base_val_cache}_rank{rank}_pid{pid}"
-    
-    # Create cache directories with proper permissions
-    os.makedirs(train_cache_dir, exist_ok=True)
-    os.makedirs(val_cache_dir, exist_ok=True)
-    
-    print(f"Process rank {rank}, PID {pid}: Using cache directories:")
+    print(f"Process rank {rank}: Using shared cache directories:")
     print(f"  Train cache: {train_cache_dir}")
     print(f"  Val cache: {val_cache_dir}")
     
