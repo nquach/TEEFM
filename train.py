@@ -218,6 +218,7 @@ def create_datasets(config, train_cache_dir=None, val_cache_dir=None):
         train_cache = train_cache_dir if train_cache_dir is not None else data_config.get('cache_dir')
         val_cache = val_cache_dir if val_cache_dir is not None else data_config.get('val_cache_dir')
         
+        is_ddp = torch.cuda.device_count() > 1
         # Create validation dataset from optimized data
         val_dataset = OptimizedVideoDataset(
             data_dir=val_data_dir,
@@ -227,7 +228,7 @@ def create_datasets(config, train_cache_dir=None, val_cache_dir=None):
             seed=training_config.get('seed', 0),
             transform=transform,
             cache_dir=val_cache,
-            custom_drop_last=True
+            custom_drop_last=True if is_ddp else False
         )
         print(f'Created optimized validation dataset from {val_data_dir} of length {len(val_dataset)}')
         
@@ -240,7 +241,7 @@ def create_datasets(config, train_cache_dir=None, val_cache_dir=None):
             seed=training_config.get('seed', 0),
             transform=transform,
             cache_dir=train_cache,
-            custom_drop_last=False
+            custom_drop_last=True
         )
         print(f'Created optimized training dataset from {train_data_dir} of length {len(train_dataset)}')
        
@@ -289,6 +290,11 @@ def create_data_loaders(train_dataset, val_dataset, config, use_optimized=False)
     training_config = config['training']
     batch_size = training_config['batch_size']
     
+    # Check if we're in DDP mode (will be True if multiple GPUs are available)
+    # In DDP, validation must use drop_last=True to ensure all processes have same number of batches
+    # This prevents deadlock when sync_dist=True synchronizes across processes
+    is_ddp = torch.cuda.device_count() > 1
+    
     if use_optimized and LITDATA_AVAILABLE:
         # Use StreamingDataLoader for optimized datasets
         print("Using StreamingDataLoader for optimized datasets")
@@ -298,15 +304,19 @@ def create_data_loaders(train_dataset, val_dataset, config, use_optimized=False)
             batch_size=batch_size,
             shuffle=True,
             num_workers=training_config.get('num_workers', 10),
-            pin_memory=training_config.get('pin_memory', True)
+            pin_memory=training_config.get('pin_memory', True),
+            drop_last=True
         )
         
+        # Reduce num_workers for validation to prevent resource contention and potential deadlocks
+        val_num_workers = max(1, training_config.get('num_workers', 10) // 2)
         val_loader = StreamingDataLoader(
             val_dataset,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=training_config.get('num_workers', 10),
-            pin_memory=training_config.get('pin_memory', True)
+            num_workers=val_num_workers,
+            pin_memory=training_config.get('pin_memory', True),
+            drop_last=True if is_ddp else False
         )
     else:
         # Use regular DataLoader
@@ -319,13 +329,16 @@ def create_data_loaders(train_dataset, val_dataset, config, use_optimized=False)
             drop_last=True  # Drop last incomplete batch
         )
         
+        # For validation in DDP, use drop_last=True to prevent deadlock
+        # This ensures all processes have the same number of batches, which is required
+        # for sync_dist=True to work correctly in validation_step
         val_loader = DataLoader(
             val_dataset,
             batch_size=batch_size,
-            shuffle=True,
+            shuffle=False,  # Validation should not be shuffled
             num_workers=training_config.get('num_workers', 10),
             pin_memory=training_config.get('pin_memory', True),
-            drop_last=False  # Keep all validation samples
+            drop_last=True if is_ddp else False  # Drop last batch in DDP to prevent deadlock
         )
     
     return train_loader, val_loader
