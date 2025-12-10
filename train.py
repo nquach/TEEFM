@@ -468,15 +468,100 @@ def main():
     print("Creating data loaders...")
     train_loader, val_loader = create_data_loaders(train_dataset, val_dataset, config, use_optimized)
     
-    # Create Lightning module
+    # Create Lightning module with comprehensive error handling and debugging
     print("Creating model...")
-    model = VideoMAELightningModule(config)
+    try:
+        rank_before_model = get_process_rank()
+        print(f"[Rank {rank_before_model}] Starting model creation...")
+        
+        # Check if pretrained path exists (if specified)
+        pretrained_path = config.get('model', {}).get('pretrained_path')
+        if pretrained_path:
+            import os
+            if not os.path.exists(pretrained_path):
+                raise FileNotFoundError(
+                    f"[Rank {rank_before_model}] Pretrained path not found: {pretrained_path}"
+                )
+            print(f"[Rank {rank_before_model}] Pretrained path verified: {pretrained_path}")
+        
+        # Create the model
+        model = VideoMAELightningModule(config)
+        print(f"[Rank {rank_before_model}] Model object created successfully")
+        
+        # Verify model was created correctly
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        
+        print(f"[Rank {rank_before_model}] Total parameters: {total_params / 1e6:.2f}M")
+        print(f"[Rank {rank_before_model}] Trainable parameters: {trainable_params / 1e6:.2f}M")
+        
+        # Verify model has reasonable number of parameters
+        # VideoMAE models should have at least 10M parameters (even for small models)
+        if total_params < 10_000_000:  # Less than 10M is suspicious
+            error_msg = (
+                f"[Rank {rank_before_model}] ERROR: Model has only {total_params} parameters. "
+                f"Expected at least ~10M parameters for VideoMAE. "
+                f"Model creation may have failed or returned an incomplete model."
+            )
+            print(error_msg)
+            
+            # Try to get more information about the model
+            try:
+                model_type = type(model).__name__
+                has_model_attr = hasattr(model, 'model')
+                if has_model_attr:
+                    model_attr_type = type(model.model).__name__
+                    print(f"[Rank {rank_before_model}] Model type: {model_type}, model.model type: {model_attr_type}")
+                else:
+                    print(f"[Rank {rank_before_model}] Model type: {model_type}, no 'model' attribute found")
+                
+                # List model attributes
+                print(f"[Rank {rank_before_model}] Model attributes: {list(model.__dict__.keys())[:10]}")
+            except Exception as debug_e:
+                print(f"[Rank {rank_before_model}] Could not inspect model: {debug_e}")
+            
+            raise RuntimeError(error_msg)
+        
+        # Additional verification: check if model has the expected structure
+        if not hasattr(model, 'model'):
+            raise RuntimeError(
+                f"[Rank {rank_before_model}] Model missing 'model' attribute. "
+                f"Expected VideoMAELightningModule to have a 'model' attribute."
+            )
+        
+        print(f"[Rank {rank_before_model}] Model verification passed")
+        
+    except FileNotFoundError as e:
+        rank_error = get_process_rank()
+        print(f"[Rank {rank_error}] FileNotFoundError during model creation: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+    except RuntimeError as e:
+        rank_error = get_process_rank()
+        print(f"[Rank {rank_error}] RuntimeError during model creation: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+    except Exception as e:
+        rank_error = get_process_rank()
+        print(f"[Rank {rank_error}] Unexpected error during model creation: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
     
-    # Count parameters
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Total parameters: {total_params / 1e6:.2f}M")
-    print(f"Trainable parameters: {trainable_params / 1e6:.2f}M")
+    # Synchronization barrier: Ensure all ranks have completed model creation before proceeding
+    # This helps catch any rank-specific issues early
+    if torch.cuda.device_count() > 1:
+        try:
+            if torch.distributed.is_initialized():
+                torch.distributed.barrier()
+                barrier_rank = get_process_rank()
+                print(f"[Rank {barrier_rank}] Model creation barrier passed - all ranks synchronized")
+        except Exception as barrier_e:
+            barrier_rank = get_process_rank()
+            print(f"[Rank {barrier_rank}] Warning: Could not synchronize ranks after model creation: {barrier_e}")
+            # Don't raise - this is just a safeguard, not critical
     
     # Setup checkpoint callback (if enabled)
     checkpoint_config = config['checkpoint']
