@@ -14,6 +14,10 @@ from litdata import StreamingDataset, StreamingDataLoader
 import numpy as np
 from litdata.streaming.cache import Dir
 
+# Suppress torchvision warnings (in case torchvision is used indirectly)
+warnings.filterwarnings('ignore', category=UserWarning, module='torchvision')
+warnings.filterwarnings('ignore', category=FutureWarning, module='torchvision')
+
 class OptimizedVideoDataset(StreamingDataset):
     """
     Optimized video dataset using LitData StreamingDataset.

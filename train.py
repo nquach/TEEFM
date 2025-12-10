@@ -6,6 +6,7 @@ PyTorch Lightning model, and trainer for training VideoMAE models.
 """
 
 import os
+import warnings
 import yaml
 import torch
 import pytorch_lightning as pl
@@ -13,6 +14,10 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 from pathlib import Path
+
+# Suppress torchvision warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='torchvision')
+warnings.filterwarnings('ignore', category=FutureWarning, module='torchvision')
 
 from datasets.custom_video_dataset import CustomVideoDataset
 from datasets.optimized_video_dataset import OptimizedVideoDataset
@@ -245,14 +250,13 @@ def create_data_loaders(train_dataset, val_dataset, config, use_optimized=False)
     if use_optimized and LITDATA_AVAILABLE:
         # Use StreamingDataLoader for optimized datasets
         print("Using StreamingDataLoader for optimized datasets")
-        
+            
         train_loader = StreamingDataLoader(
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
             num_workers=training_config.get('num_workers', 10),
             pin_memory=training_config.get('pin_memory', True),
-            drop_last=False  # Cannot drop last batch otherwise wont start validation step
         )
         
         val_loader = StreamingDataLoader(
