@@ -477,6 +477,7 @@ def main():
         # Check if pretrained path exists (if specified)
         pretrained_path = config.get('model', {}).get('pretrained_path')
         if pretrained_path:
+            import os
             if not os.path.exists(pretrained_path):
                 raise FileNotFoundError(
                     f"[Rank {rank_before_model}] Pretrained path not found: {pretrained_path}"
