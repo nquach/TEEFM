@@ -305,6 +305,7 @@ def create_data_loaders(train_dataset, val_dataset, config, use_optimized=False)
             shuffle=True,
             num_workers=training_config.get('num_workers', 10),
             pin_memory=training_config.get('pin_memory', True),
+            persistent_workers=True if is_ddp else False,
             drop_last=True
         )
         
@@ -460,7 +461,7 @@ def main():
         max_epochs=config['training']['max_epochs'],
         accelerator='auto' if torch.cuda.is_available() else 'cpu',
         devices='auto',  # Use all available GPUs
-        strategy='ddp' if torch.cuda.device_count() > 1 else 'auto',
+        strategy='ddp_spawn' if torch.cuda.device_count() > 1 else 'auto',
         callbacks=callbacks_list if callbacks_list else None,
         logger=logger,
         log_every_n_steps=logging_config.get('log_freq', 10),
