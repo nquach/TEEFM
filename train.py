@@ -94,28 +94,6 @@ class RankAwareModelCheckpoint(ModelCheckpoint):
         super().__init__(*args, **kwargs)
         self._rank = get_process_rank()
     
-    def __getstate__(self):
-        """
-        Custom pickling to preserve rank-aware behavior.
-        
-        This ensures that when PyTorch Lightning pickles/unpickles the callback
-        (which can happen in DDP), our custom rank-aware behavior is preserved.
-        """
-        state = super().__getstate__()
-        state['_rank'] = get_process_rank()
-        return state
-    
-    def __setstate__(self, state):
-        """
-        Custom unpickling to preserve rank-aware behavior.
-        
-        This ensures that after unpickling, the callback still knows its rank
-        and can prevent execution on non-zero ranks.
-        """
-        super().__setstate__(state)
-        # Re-check rank after unpickling to ensure correctness
-        self._rank = get_process_rank()
-    
     def _is_rank_zero(self):
         """Check if current process is rank 0."""
         # Re-check rank in case it changed (shouldn't happen, but defensive)
@@ -549,27 +527,9 @@ def main():
         enable_model_summary=True,
         precision='16-mixed' if torch.cuda.is_available() else '32',  # Use mixed precision on GPU
         gradient_clip_val=config.get('training', {}).get('gradient_clip_val', 0),
-        check_val_every_n_epoch=config.get('training', {}).get('check_val_every_n_epoch', 1)
+        check_val_every_n_epoch=config.get('training', {}).get('check_val_every_n_epoch', 1),
+        val_check_interval=1.0
     )
-    # Note: val_check_interval removed - validation will run at end of each epoch only
-    # Setting val_check_interval=1.0 causes validation to run after every training step
-    
-    # Explicit safeguard: Ensure callback is None on non-zero ranks after trainer creation
-    # This prevents any callback operations on non-zero ranks even if PyTorch Lightning
-    # somehow creates or synchronizes callback instances
-    if torch.cuda.device_count() > 1:  # Multi-GPU training
-        final_safeguard_rank = get_process_rank()
-        if final_safeguard_rank != 0:
-            # Explicitly ensure no checkpoint callback exists on non-zero ranks
-            if checkpoint_callback is not None:
-                print(f"Warning: Checkpoint callback exists on rank {final_safeguard_rank}, removing it")
-                checkpoint_callback = None
-            # Ensure callbacks list is empty on non-zero ranks
-            if hasattr(trainer, 'callbacks') and trainer.callbacks:
-                # Filter out any ModelCheckpoint callbacks on non-zero ranks
-                trainer.callbacks = [cb for cb in trainer.callbacks 
-                                    if not isinstance(cb, (ModelCheckpoint, RankAwareModelCheckpoint))]
-                print(f"Removed checkpoint callbacks from trainer on rank {final_safeguard_rank}")
     
     # Start training
     print("Starting training...")
