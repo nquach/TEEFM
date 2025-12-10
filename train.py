@@ -136,29 +136,6 @@ class RankAwareModelCheckpoint(ModelCheckpoint):
             return False
         return super().file_exists(filepath, trainer)
     
-    def _save_topk_checkpoint(self, trainer, monitor_candidates):
-        """
-        Override to prevent top-k checkpoint saving from executing on non-zero ranks.
-        
-        This method is called during on_train_epoch_end and can cause broadcast errors
-        if executed on non-zero ranks. This is the entry point that calls other
-        checkpoint saving methods.
-        """
-        if not self._is_rank_zero():
-            return
-        super()._save_topk_checkpoint(trainer, monitor_candidates)
-    
-    def _save_monitor_checkpoint(self, trainer, monitor_candidates):
-        """
-        Override to prevent monitor-based checkpoint saving from executing on non-zero ranks.
-        
-        This method is called when monitoring a metric (like val_loss) and can cause
-        broadcast errors if executed on non-zero ranks.
-        """
-        if not self._is_rank_zero():
-            return
-        super()._save_monitor_checkpoint(trainer, monitor_candidates)
-    
     def _save_none_monitor_checkpoint(self, trainer, monitor_candidates):
         """
         Override to prevent checkpoint saving logic from executing on non-zero ranks.
@@ -527,8 +504,7 @@ def main():
         enable_model_summary=True,
         precision='16-mixed' if torch.cuda.is_available() else '32',  # Use mixed precision on GPU
         gradient_clip_val=config.get('training', {}).get('gradient_clip_val', 0),
-        check_val_every_n_epoch=config.get('training', {}).get('check_val_every_n_epoch', 1),
-        val_check_interval=1.0
+        check_val_every_n_epoch=config.get('training', {}).get('check_val_every_n_epoch', 1)
     )
     
     # Start training
