@@ -300,8 +300,8 @@ class VideoMAELightningModule(pl.LightningModule):
         
         # Log validation loss
         # sync_dist=True ensures metric is aggregated across all devices in distributed training
-        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-        
+        #self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        self.log('val_loss', loss, sync_dist=True, reduce_fx='mean')
         return loss
     
     def configure_optimizers(self):

@@ -282,7 +282,7 @@ def create_data_loaders(train_dataset, val_dataset, config, use_optimized=False)
         val_loader = DataLoader(
             val_dataset,
             batch_size=batch_size,
-            shuffle=False,
+            shuffle=True,
             num_workers=training_config.get('num_workers', 10),
             pin_memory=training_config.get('pin_memory', True),
             drop_last=False  # Keep all validation samples
@@ -370,7 +370,7 @@ def main():
             monitor=checkpoint_config.get('monitor', 'val_loss'),
             mode='min',  # Minimize validation loss
             save_top_k=checkpoint_config.get('save_top_k', 3),
-            save_last=False,  # Always save last checkpoint
+            save_last=True,  # Always save last checkpoint
             verbose=True,
             every_n_epochs=1
         )
