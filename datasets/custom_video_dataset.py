@@ -13,10 +13,6 @@ from torch.utils.data import Dataset
 from torchvision.io import read_video
 import numpy as np
 
-# Suppress torchvision warnings
-warnings.filterwarnings('ignore', category=UserWarning, module='torchvision')
-warnings.filterwarnings('ignore', category=FutureWarning, module='torchvision')
-
 
 class CustomVideoDataset(Dataset):
     """

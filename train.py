@@ -6,7 +6,6 @@ PyTorch Lightning model, and trainer for training VideoMAE models.
 """
 
 import os
-import warnings
 import yaml
 import torch
 import pytorch_lightning as pl
@@ -14,10 +13,6 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader
 from pathlib import Path
-
-# Suppress torchvision warnings
-warnings.filterwarnings('ignore', category=UserWarning, module='torchvision')
-warnings.filterwarnings('ignore', category=FutureWarning, module='torchvision')
 
 from datasets.custom_video_dataset import CustomVideoDataset
 from datasets.optimized_video_dataset import OptimizedVideoDataset

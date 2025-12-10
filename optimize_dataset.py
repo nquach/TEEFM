@@ -1,13 +1,8 @@
 import os
-import warnings
 import litdata as ld
 from torchvision.io import read_video
 import subprocess
 from tqdm import tqdm
-
-# Suppress torchvision warnings
-warnings.filterwarnings('ignore', category=UserWarning, module='torchvision')
-warnings.filterwarnings('ignore', category=FutureWarning, module='torchvision')
 
 def safe_makedir(path):
 	if not os.path.exists(path):
