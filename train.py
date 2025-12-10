@@ -73,42 +73,36 @@ class RankAwareModelCheckpoint(ModelCheckpoint):
     def __init__(self, *args, **kwargs):
         """Initialize the rank-aware checkpoint callback."""
         super().__init__(*args, **kwargs)
-        # Don't store rank - check dynamically in each method to handle pickling/unpickling
+        self._rank = get_process_rank()
     
     def _should_execute(self):
-        """Check if this callback should execute on the current rank (checked dynamically)."""
-        # Check rank dynamically each time to handle pickling/unpickling and DDP synchronization
-        current_rank = get_process_rank()
-        return current_rank == 0
+        """Check if this callback should execute on the current rank."""
+        return self._rank == 0
     
     def on_train_epoch_end(self, trainer, pl_module):
         """Only execute on rank 0."""
-        if not self._should_execute():
-            return  # Early return on non-zero ranks
-        super().on_train_epoch_end(trainer, pl_module)
+        if self._should_execute():
+            super().on_train_epoch_end(trainer, pl_module)
     
     def on_validation_end(self, trainer, pl_module):
         """Only execute on rank 0."""
-        if not self._should_execute():
-            return
-        super().on_validation_end(trainer, pl_module)
+        if self._should_execute():
+            super().on_validation_end(trainer, pl_module)
     
     def on_validation_epoch_end(self, trainer, pl_module):
         """Only execute on rank 0."""
-        if not self._should_execute():
-            return
-        super().on_validation_epoch_end(trainer, pl_module)
+        if self._should_execute():
+            super().on_validation_epoch_end(trainer, pl_module)
     
     def on_train_end(self, trainer, pl_module):
         """Only execute on rank 0."""
-        if not self._should_execute():
-            return
-        super().on_train_end(trainer, pl_module)
+        if self._should_execute():
+            super().on_train_end(trainer, pl_module)
     
     def file_exists(self, filepath, trainer):
         """
         Override file_exists to prevent broadcast on non-zero ranks.
-        Returns False on non-zero ranks without broadcasting to avoid serialization errors.
+        Returns False on non-zero ranks without broadcasting to avoid SymInt serialization errors.
         """
         if not self._should_execute():
             return False  # Non-zero ranks always return False without broadcasting
@@ -116,21 +110,18 @@ class RankAwareModelCheckpoint(ModelCheckpoint):
     
     def _save_topk_checkpoint(self, trainer, monitor_candidates):
         """Only execute on rank 0."""
-        if not self._should_execute():
-            return
-        super()._save_topk_checkpoint(trainer, monitor_candidates)
+        if self._should_execute():
+            super()._save_topk_checkpoint(trainer, monitor_candidates)
     
     def _save_monitor_checkpoint(self, trainer, monitor_candidates):
         """Only execute on rank 0."""
-        if not self._should_execute():
-            return
-        super()._save_monitor_checkpoint(trainer, monitor_candidates)
+        if self._should_execute():
+            super()._save_monitor_checkpoint(trainer, monitor_candidates)
     
     def _save_none_monitor_checkpoint(self, trainer, monitor_candidates):
         """Only execute on rank 0."""
-        if not self._should_execute():
-            return
-        super()._save_none_monitor_checkpoint(trainer, monitor_candidates)
+        if self._should_execute():
+            super()._save_none_monitor_checkpoint(trainer, monitor_candidates)
 
 
 def load_config(config_path):
@@ -513,17 +504,6 @@ def main():
         gradient_clip_val=config.get('training', {}).get('gradient_clip_val', 0),
         check_val_every_n_epoch=config.get('training', {}).get('check_val_every_n_epoch', 1)
     )
-    
-    # Explicit safeguard: Remove checkpoint callbacks from non-zero ranks after trainer creation
-    # This prevents PyTorch Lightning from synchronizing callbacks across ranks
-    if torch.cuda.device_count() > 1:  # Multi-GPU training
-        final_rank = get_process_rank()
-        if final_rank != 0:
-            # Remove any ModelCheckpoint callbacks from the trainer's callback list
-            if hasattr(trainer, 'callbacks') and trainer.callbacks:
-                trainer.callbacks = [cb for cb in trainer.callbacks 
-                                    if not isinstance(cb, (ModelCheckpoint, RankAwareModelCheckpoint))]
-                print(f"Removed checkpoint callbacks from trainer on rank {final_rank}")
     
     # Start training
     print("Starting training...")
