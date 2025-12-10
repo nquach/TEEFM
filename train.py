@@ -34,6 +34,45 @@ except ImportError:
     print("Warning: litdata package not found. Install with: pip install litdata")
 
 
+class DistributedModelCheckpoint(ModelCheckpoint):
+    """
+    Custom ModelCheckpoint callback that fixes distributed training issues.
+    
+    Overrides the file_exists method to avoid problematic broadcasts in distributed
+    training that cause SymIntArrayRef errors. Only rank 0 performs file existence
+    checks, and the result is returned directly without broadcasting.
+    """
+    
+    def file_exists(self, filepath, trainer):
+        """
+        Check if a file exists, avoiding distributed broadcast issues.
+        
+        In distributed training, only rank 0 checks file existence and returns
+        the result. Other ranks return False without checking, since only rank 0
+        performs checkpoint saves anyway.
+        
+        Args:
+            filepath: Path to the file to check
+            trainer: PyTorch Lightning trainer instance
+        
+        Returns:
+            bool: True if file exists (on rank 0), False otherwise
+        """
+        # Check if we're in a distributed setting
+        if torch.distributed.is_initialized():
+            rank = torch.distributed.get_rank()
+            # Only rank 0 checks file existence
+            if rank == 0:
+                exists = os.path.exists(filepath)
+                return exists
+            else:
+                # Other ranks don't need to check since only rank 0 saves
+                return False
+        else:
+            # Single process - check normally
+            return os.path.exists(filepath)
+
+
 def load_config(config_path):
     """
     Load configuration from YAML file.
@@ -369,8 +408,8 @@ def main():
         
         # Configure ModelCheckpoint to avoid distributed broadcast issues
         # Use save_on_train_epoch_end=False to save only after validation
-        # This helps avoid the problematic file existence check during training
-        checkpoint_callback = ModelCheckpoint(
+        # Use custom DistributedModelCheckpoint to avoid file existence broadcast errors
+        checkpoint_callback = DistributedModelCheckpoint(
             dirpath=checkpoint_dir,
             filename=f"{checkpoint_prefix}-{{epoch:02d}}-{{val_loss:.4f}}",
             monitor=checkpoint_config.get('monitor', 'val_loss'),
