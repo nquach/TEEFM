@@ -135,17 +135,6 @@ class RankAwareModelCheckpoint(ModelCheckpoint):
             # Return False on non-zero ranks to prevent broadcast
             return False
         return super().file_exists(filepath, trainer)
-    
-    def _save_none_monitor_checkpoint(self, trainer, monitor_candidates):
-        """
-        Override to prevent checkpoint saving logic from executing on non-zero ranks.
-        
-        This method is called during on_train_epoch_end and can cause broadcast errors
-        if executed on non-zero ranks.
-        """
-        if not self._is_rank_zero():
-            return
-        super()._save_none_monitor_checkpoint(trainer, monitor_candidates)
 
 
 def setup_litdata_cache_dirs(config):
@@ -443,28 +432,30 @@ def main():
         # In DDP, only rank 0 should save checkpoints to avoid synchronization issues
         rank = get_process_rank()
         
-        # Only create checkpoint callback on rank 0 to prevent any callback operations on other ranks
-        # This is critical: creating the callback on all ranks can cause DDP synchronization issues
+        # Create checkpoint callback using RankAwareModelCheckpoint wrapper
+        # This ensures checkpoint operations only execute on rank 0, preventing DDP broadcast errors
+        checkpoint_dir = checkpoint_config['dir']
+        checkpoint_prefix = checkpoint_config['prefix']
+        
+        # Create checkpoint directory (only on rank 0, but safe to call on all ranks)
         if rank == 0:
-            checkpoint_dir = checkpoint_config['dir']
-            checkpoint_prefix = checkpoint_config['prefix']
-            
-            # Create checkpoint directory
             os.makedirs(checkpoint_dir, exist_ok=True)
-            
-            checkpoint_callback = RankAwareModelCheckpoint(
-                dirpath=checkpoint_dir,
-                filename=f"{checkpoint_prefix}-{{epoch:02d}}-{{val_loss:.4f}}",
-                monitor=checkpoint_config.get('monitor', 'val_loss'),
-                mode='min',  # Minimize validation loss
-                save_top_k=checkpoint_config.get('save_top_k', 3),
-                save_last=True,  # Always save last checkpoint
-                save_on_train_epoch_end=False,  # Only save after validation, not during training epochs
-                verbose=True
-            )
+        
+        checkpoint_callback = RankAwareModelCheckpoint(
+            dirpath=checkpoint_dir,
+            filename=f"{checkpoint_prefix}-{{epoch:02d}}-{{val_loss:.4f}}",
+            monitor=checkpoint_config.get('monitor', 'val_loss'),
+            mode='min',  # Minimize validation loss
+            save_top_k=checkpoint_config.get('save_top_k', 3),
+            save_last=True,  # Always save last checkpoint
+            save_on_train_epoch_end=False,  # Only save after validation, not during training epochs
+            verbose=True
+        )
+        
+        if rank == 0:
             print(f"Checkpoint saving enabled on rank 0. Checkpoints will be saved to: {checkpoint_dir}")
         else:
-            print(f"Checkpoint saving disabled on rank {rank} (only rank 0 saves checkpoints in DDP)")
+            print(f"Checkpoint callback created on rank {rank} but will only execute on rank 0")
     else:
         print("Checkpoint saving disabled. No model weights will be saved.")
     
