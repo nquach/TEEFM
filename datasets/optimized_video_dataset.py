@@ -91,6 +91,7 @@ class OptimizedVideoDataset(StreamingDataset):
         # Load data from parent StreamingDataset with error handling and retry logic
         # The optimized dataset returns a dict with "path" and "video" keys
         # Retry on ValueError (corrupted chunk error) up to max_retries times
+        # Handles both offset unpacking errors and deserialization errors
         data = None
         last_error = None
         
@@ -99,9 +100,12 @@ class OptimizedVideoDataset(StreamingDataset):
                 data = super().__getitem__(idx)
                 break  # Success, exit retry loop
             except ValueError as e:
-                # Check if this is the corrupted chunk error
+                # Check if this is a corrupted chunk error (offset unpacking or deserialization)
                 error_msg = str(e)
-                if "not enough values to unpack" in error_msg or "expected" in error_msg:
+                is_offset_error = "not enough values to unpack" in error_msg or "expected" in error_msg
+                is_deserialization_error = "treespec" in error_msg or "leaves" in error_msg or "pytree" in error_msg
+                
+                if is_offset_error or is_deserialization_error:
                     last_error = e
                     if attempt < self.max_retries - 1:
                         # Wait a bit before retrying to allow cache to be updated
