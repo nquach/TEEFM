@@ -34,96 +34,6 @@ except ImportError:
     print("Warning: litdata package not found. Install with: pip install litdata")
 
 
-def get_process_rank():
-    """
-    Get the current process rank for distributed training.
-    
-    Returns:
-        int: Process rank (0 for main process, 1+ for other processes in DDP)
-    """
-    # PyTorch Lightning sets LOCAL_RANK and RANK environment variables before spawning processes
-    # Try environment variables first (most reliable for PyTorch Lightning DDP)
-    rank_str = os.environ.get('LOCAL_RANK') or os.environ.get('RANK', '0')
-    try:
-        rank = int(rank_str)
-    except (ValueError, TypeError):
-        # Fall back to torch.distributed if available and initialized
-        try:
-            if hasattr(torch, 'distributed') and torch.distributed.is_initialized():
-                rank = torch.distributed.get_rank()
-            else:
-                rank = 0
-        except (AttributeError, RuntimeError):
-            # Single GPU or distributed not available
-            rank = 0
-    return rank
-
-
-class RankAwareModelCheckpoint(ModelCheckpoint):
-    """
-    A ModelCheckpoint wrapper that only executes on rank 0 to prevent DDP broadcast errors.
-    
-    This class wraps PyTorch Lightning's ModelCheckpoint and adds rank checks to prevent
-    execution on non-zero ranks, which can cause broadcast synchronization errors in DDP.
-    
-    All callback methods check the process rank and only execute on rank 0, returning
-    immediately (no-op) on other ranks.
-    """
-    
-    def __init__(self, *args, **kwargs):
-        """Initialize the rank-aware checkpoint callback."""
-        super().__init__(*args, **kwargs)
-        self._rank = get_process_rank()
-    
-    def _should_execute(self):
-        """Check if this callback should execute on the current rank."""
-        return self._rank == 0
-    
-    def on_train_epoch_end(self, trainer, pl_module):
-        """Only execute on rank 0."""
-        if self._should_execute():
-            super().on_train_epoch_end(trainer, pl_module)
-    
-    def on_validation_end(self, trainer, pl_module):
-        """Only execute on rank 0."""
-        if self._should_execute():
-            super().on_validation_end(trainer, pl_module)
-    
-    def on_validation_epoch_end(self, trainer, pl_module):
-        """Only execute on rank 0."""
-        if self._should_execute():
-            super().on_validation_epoch_end(trainer, pl_module)
-    
-    def on_train_end(self, trainer, pl_module):
-        """Only execute on rank 0."""
-        if self._should_execute():
-            super().on_train_end(trainer, pl_module)
-    
-    def file_exists(self, filepath, trainer):
-        """
-        Override file_exists to prevent broadcast on non-zero ranks.
-        Returns False on non-zero ranks without broadcasting to avoid SymInt serialization errors.
-        """
-        if not self._should_execute():
-            return False  # Non-zero ranks always return False without broadcasting
-        return super().file_exists(filepath, trainer)
-    
-    def _save_topk_checkpoint(self, trainer, monitor_candidates):
-        """Only execute on rank 0."""
-        if self._should_execute():
-            super()._save_topk_checkpoint(trainer, monitor_candidates)
-    
-    def _save_monitor_checkpoint(self, trainer, monitor_candidates):
-        """Only execute on rank 0."""
-        if self._should_execute():
-            super()._save_monitor_checkpoint(trainer, monitor_candidates)
-    
-    def _save_none_monitor_checkpoint(self, trainer, monitor_candidates):
-        """Only execute on rank 0."""
-        if self._should_execute():
-            super()._save_none_monitor_checkpoint(trainer, monitor_candidates)
-
-
 def load_config(config_path):
     """
     Load configuration from YAML file.
@@ -451,24 +361,19 @@ def main():
         checkpoint_dir = checkpoint_config['dir']
         checkpoint_prefix = checkpoint_config['prefix']
         
-        # Only create checkpoint callback on rank 0 to prevent DDP broadcast errors
-        rank = get_process_rank()
-        if rank == 0:
-            # Create checkpoint directory
-            os.makedirs(checkpoint_dir, exist_ok=True)
-            
-            checkpoint_callback = RankAwareModelCheckpoint(
-                dirpath=checkpoint_dir,
-                filename=f"{checkpoint_prefix}-{{epoch:02d}}-{{val_loss:.4f}}",
-                monitor=checkpoint_config.get('monitor', 'val_loss'),
-                mode='min',  # Minimize validation loss
-                save_top_k=checkpoint_config.get('save_top_k', 3),
-                save_last=True,  # Always save last checkpoint
-                verbose=True
-            )
-            print(f"Checkpoint saving enabled on rank 0. Checkpoints will be saved to: {checkpoint_dir}")
-        else:
-            print(f"Checkpoint saving disabled on rank {rank} (only rank 0 saves checkpoints in DDP)")
+        # Create checkpoint directory
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        checkpoint_callback = ModelCheckpoint(
+            dirpath=checkpoint_dir,
+            filename=f"{checkpoint_prefix}-{{epoch:02d}}-{{val_loss:.4f}}",
+            monitor=checkpoint_config.get('monitor', 'val_loss'),
+            mode='min',  # Minimize validation loss
+            save_top_k=checkpoint_config.get('save_top_k', 3),
+            save_last=True,  # Always save last checkpoint
+            verbose=True
+        )
+        print(f"Checkpoint saving enabled. Checkpoints will be saved to: {checkpoint_dir}")
     else:
         print("Checkpoint saving disabled. No model weights will be saved.")
     
