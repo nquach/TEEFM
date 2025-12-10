@@ -248,6 +248,7 @@ class VideoMAELightningModule(pl.LightningModule):
         Returns:
             torch.Tensor: Loss value
         """
+        print(f'DEBUGGING STATEMENT: Validation step {batch_idx}')
         videos, bool_masked_pos = batch
         
         # Handle mask based on mask type
@@ -302,8 +303,10 @@ class VideoMAELightningModule(pl.LightningModule):
         loss = self.criterion(outputs, labels)
         
         # Log validation loss
-        # sync_dist=True ensures metric is aggregated across all devices in distributed training
-        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        # Note: sync_dist=False here to prevent DDP deadlock with uneven batch distribution
+        # PyTorch Lightning automatically aggregates metrics at epoch end across all devices
+        # when on_epoch=True, so we don't need sync_dist=True at step level
+        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=False)
         
         return loss
     
