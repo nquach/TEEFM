@@ -42,7 +42,7 @@ class OptimizedVideoDataset(StreamingDataset):
         seed=None,
         transform=None,
         cache_dir=None,
-        custom_max_cache_size='30GB'
+        custom_max_cache_size='25GB'
     ):
         # Initialize parent StreamingDataset class
         # StreamingDataset is initialized with data_dir
