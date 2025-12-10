@@ -118,6 +118,18 @@ class VideoMAELightningModule(pl.LightningModule):
         if self._optimizer is not None and hasattr(self._optimizer, 'eval'):
             self._optimizer.eval()
     
+    def on_before_optimizer_step(self, optimizer):
+        """
+        Hook called before each optimizer.step() call.
+        Required for schedule-free optimizers to ensure they're in train mode.
+        
+        Args:
+            optimizer: The optimizer being stepped
+        """
+        # Set optimizer to training mode before each step (required for schedule-free optimizers)
+        if hasattr(optimizer, 'train'):
+            optimizer.train()
+    
     def training_step(self, batch, batch_idx):
         """
         Training step for one batch.
@@ -129,6 +141,10 @@ class VideoMAELightningModule(pl.LightningModule):
         Returns:
             torch.Tensor: Loss value
         """
+        # Ensure optimizer is in train mode (safeguard for schedule-free optimizers)
+        if self._optimizer is not None and hasattr(self._optimizer, 'train'):
+            self._optimizer.train()
+        
         videos, bool_masked_pos = batch
         
         # Handle mask based on mask type
