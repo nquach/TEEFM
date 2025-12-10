@@ -361,9 +361,15 @@ def main():
         checkpoint_dir = checkpoint_config['dir']
         checkpoint_prefix = checkpoint_config['prefix']
         
-        # Create checkpoint directory
-        os.makedirs(checkpoint_dir, exist_ok=True)
+        # Only create checkpoint directory on rank 0 to avoid race conditions
+        # Check if we're in a distributed setting
+        rank = int(os.environ.get('LOCAL_RANK', os.environ.get('RANK', '0')))
+        if rank == 0:
+            os.makedirs(checkpoint_dir, exist_ok=True)
         
+        # Configure ModelCheckpoint to avoid distributed broadcast issues
+        # Use save_on_train_epoch_end=False to save only after validation
+        # This helps avoid the problematic file existence check during training
         checkpoint_callback = ModelCheckpoint(
             dirpath=checkpoint_dir,
             filename=f"{checkpoint_prefix}-{{epoch:02d}}-{{val_loss:.4f}}",
@@ -372,7 +378,8 @@ def main():
             save_top_k=checkpoint_config.get('save_top_k', 3),
             save_last=True,  # Always save last checkpoint
             verbose=True,
-            every_n_epochs=1
+            every_n_epochs=1,
+            save_on_train_epoch_end=False  # Save only after validation to avoid broadcast issues
         )
         print(f"Checkpoint saving enabled. Checkpoints will be saved to: {checkpoint_dir}")
     else:
