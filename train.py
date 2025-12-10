@@ -186,7 +186,8 @@ def create_datasets(config, train_cache_dir=None, val_cache_dir=None):
             subset_ratio=None,  # Always use full validation set
             seed=training_config.get('seed', 0),
             transform=transform,
-            cache_dir=val_cache
+            cache_dir=val_cache,
+            custom_drop_last=True
         )
         print(f'Created optimized validation dataset from {val_data_dir} of length {len(val_dataset)}')
         
@@ -199,6 +200,7 @@ def create_datasets(config, train_cache_dir=None, val_cache_dir=None):
             seed=training_config.get('seed', 0),
             transform=transform,
             cache_dir=train_cache,
+            custom_drop_last=False
         )
         print(f'Created optimized training dataset from {train_data_dir} of length {len(train_dataset)}')
        
@@ -213,8 +215,7 @@ def create_datasets(config, train_cache_dir=None, val_cache_dir=None):
             temporal_stride=training_config.get('temporal_stride', 2),
             subset_ratio=data_config.get('subset_ratio'),
             seed=training_config.get('seed', 0),
-            transform=transform,
-            custom_drop_last=True
+            transform=transform
         )
         
         # Create validation dataset (no subset sampling for validation)
@@ -224,8 +225,7 @@ def create_datasets(config, train_cache_dir=None, val_cache_dir=None):
             temporal_stride=training_config.get('temporal_stride', 2),
             subset_ratio=None,  # Always use full validation set
             seed=training_config.get('seed', 0),
-            transform=transform,
-            custom_drop_last=True
+            transform=transform
         )
     
     return train_dataset, val_dataset, use_optimized
