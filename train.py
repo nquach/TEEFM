@@ -112,12 +112,6 @@ class RankAwareModelCheckpoint(ModelCheckpoint):
             return
         super().on_validation_end(trainer, pl_module)
     
-    def on_validation_epoch_end(self, trainer, pl_module):
-        """Override to only execute on rank 0."""
-        if not self._is_rank_zero():
-            return
-        super().on_validation_epoch_end(trainer, pl_module)
-    
     def on_train_end(self, trainer, pl_module):
         """Override to only execute on rank 0."""
         if not self._is_rank_zero():
@@ -471,16 +465,10 @@ def main():
         name=logger_name
     )
     
-    # Prepare callbacks list (only include checkpoint callback if enabled and on rank 0)
-    # This is critical: only register callback on rank 0 to prevent DDP synchronization issues
+    # Prepare callbacks list (only include checkpoint callback if enabled)
     callbacks_list = []
     if checkpoint_callback is not None:
-        final_rank_check = get_process_rank()
-        if final_rank_check == 0:
-            callbacks_list.append(checkpoint_callback)
-            print(f"Checkpoint callback registered on rank {final_rank_check}")
-        else:
-            print(f"Checkpoint callback NOT registered on rank {final_rank_check} (only rank 0 saves checkpoints)")
+        callbacks_list.append(checkpoint_callback)
     
     # Create trainer
     trainer = pl.Trainer(
