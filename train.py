@@ -178,11 +178,14 @@ def create_datasets(config, train_cache_dir=None, val_cache_dir=None):
         val_cache_dir (str, optional): Unique cache directory for validation dataset (for multi-GPU)
     
     Returns:
-        tuple: (train_dataset, val_dataset, use_optimized)
+        tuple: (train_dataset, val_dataset, use_optimized) where val_dataset can be None if validation is disabled
     """
     data_config = config['data']
     model_config = config['model']
     training_config = config['training']
+    
+    # Check if validation is enabled
+    enable_validation = training_config.get('enable_validation', True)
     
     # Check if optimized datasets should be used
     use_optimized = data_config.get('use_optimized', False)
@@ -238,18 +241,22 @@ def create_datasets(config, train_cache_dir=None, val_cache_dir=None):
         val_cache = val_cache_dir if val_cache_dir is not None else data_config.get('val_cache_dir')
         
         is_ddp = torch.cuda.device_count() > 1
-        # Create validation dataset from optimized data
-        val_dataset = OptimizedVideoDataset(
-            data_dir=val_data_dir,
-            frames_to_sample=training_config.get('frames_to_sample', 32),
-            temporal_stride=training_config.get('temporal_stride', 2),
-            subset_ratio=None,  # Always use full validation set
-            seed=training_config.get('seed', 0),
-            transform=transform,
-            cache_dir=val_cache,
-            custom_drop_last=True if is_ddp else False
-        )
-        print(f'Created optimized validation dataset from {val_data_dir} of length {len(val_dataset)}')
+        # Create validation dataset from optimized data (only if validation is enabled)
+        if enable_validation:
+            val_dataset = OptimizedVideoDataset(
+                data_dir=val_data_dir,
+                frames_to_sample=training_config.get('frames_to_sample', 32),
+                temporal_stride=training_config.get('temporal_stride', 2),
+                subset_ratio=None,  # Always use full validation set
+                seed=training_config.get('seed', 0),
+                transform=transform,
+                cache_dir=val_cache,
+                custom_drop_last=True if is_ddp else False
+            )
+            print(f'Created optimized validation dataset from {val_data_dir} of length {len(val_dataset)}')
+        else:
+            val_dataset = None
+            print('Validation disabled: skipping validation dataset creation')
         
         # Create training dataset from optimized data
         train_dataset = OptimizedVideoDataset(
@@ -278,15 +285,19 @@ def create_datasets(config, train_cache_dir=None, val_cache_dir=None):
             transform=transform
         )
         
-        # Create validation dataset (no subset sampling for validation)
-        val_dataset = CustomVideoDataset(
-            csv_file=data_config['val_csv'],
-            frames_to_sample=training_config.get('frames_to_sample', 32),
-            temporal_stride=training_config.get('temporal_stride', 2),
-            subset_ratio=None,  # Always use full validation set
-            seed=training_config.get('seed', 0),
-            transform=transform
-        )
+        # Create validation dataset (no subset sampling for validation) - only if validation is enabled
+        if enable_validation:
+            val_dataset = CustomVideoDataset(
+                csv_file=data_config['val_csv'],
+                frames_to_sample=training_config.get('frames_to_sample', 32),
+                temporal_stride=training_config.get('temporal_stride', 2),
+                subset_ratio=None,  # Always use full validation set
+                seed=training_config.get('seed', 0),
+                transform=transform
+            )
+        else:
+            val_dataset = None
+            print('Validation disabled: skipping validation dataset creation')
     
     return train_dataset, val_dataset, use_optimized
 
@@ -299,12 +310,12 @@ def create_data_loaders(train_dataset, val_dataset, config, use_optimized=False)
     
     Args:
         train_dataset: Training dataset
-        val_dataset: Validation dataset
+        val_dataset: Validation dataset (can be None if validation is disabled)
         config (dict): Configuration dictionary
         use_optimized (bool): Whether to use StreamingDataLoader for optimized datasets
     
     Returns:
-        tuple: (train_loader, val_loader)
+        tuple: (train_loader, val_loader) where val_loader can be None if validation is disabled
     """
     training_config = config['training']
     batch_size = training_config['batch_size']
@@ -328,16 +339,20 @@ def create_data_loaders(train_dataset, val_dataset, config, use_optimized=False)
             drop_last=True
         )
         
-        # Reduce num_workers for validation to prevent resource contention and potential deadlocks
-        val_num_workers = max(1, training_config.get('num_workers', 10) // 2)
-        val_loader = StreamingDataLoader(
-            val_dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=val_num_workers,
-            pin_memory=training_config.get('pin_memory', True),
-            drop_last=True if is_ddp else False
-        )
+        # Create validation loader only if validation dataset exists
+        if val_dataset is not None:
+            # Reduce num_workers for validation to prevent resource contention and potential deadlocks
+            val_num_workers = max(1, training_config.get('num_workers', 10) // 2)
+            val_loader = StreamingDataLoader(
+                val_dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                num_workers=val_num_workers,
+                pin_memory=training_config.get('pin_memory', True),
+                drop_last=True if is_ddp else False
+            )
+        else:
+            val_loader = None
     else:
         # Use regular DataLoader
         train_loader = DataLoader(
@@ -349,17 +364,21 @@ def create_data_loaders(train_dataset, val_dataset, config, use_optimized=False)
             drop_last=True  # Drop last incomplete batch
         )
         
-        # For validation in DDP, use drop_last=True to prevent deadlock
-        # This ensures all processes have the same number of batches, which is required
-        # for sync_dist=True to work correctly in validation_step
-        val_loader = DataLoader(
-            val_dataset,
-            batch_size=batch_size,
-            shuffle=False,  # Validation should not be shuffled
-            num_workers=training_config.get('num_workers', 10),
-            pin_memory=training_config.get('pin_memory', True),
-            drop_last=True if is_ddp else False  # Drop last batch in DDP to prevent deadlock
-        )
+        # Create validation loader only if validation dataset exists
+        if val_dataset is not None:
+            # For validation in DDP, use drop_last=True to prevent deadlock
+            # This ensures all processes have the same number of batches, which is required
+            # for sync_dist=True to work correctly in validation_step
+            val_loader = DataLoader(
+                val_dataset,
+                batch_size=batch_size,
+                shuffle=False,  # Validation should not be shuffled
+                num_workers=training_config.get('num_workers', 10),
+                pin_memory=training_config.get('pin_memory', True),
+                drop_last=True if is_ddp else False  # Drop last batch in DDP to prevent deadlock
+            )
+        else:
+            val_loader = None
     
     return train_loader, val_loader
 
@@ -409,7 +428,10 @@ def main():
         val_cache_dir=val_cache_dir
     )
     print(f"Training dataset size: {len(train_dataset)}")
-    print(f"Validation dataset size: {len(val_dataset)}")
+    if val_dataset is not None:
+        print(f"Validation dataset size: {len(val_dataset)}")
+    else:
+        print("Validation disabled: no validation dataset created")
     
     # Create data loaders
     print("Creating data loaders...")
@@ -429,6 +451,9 @@ def main():
     checkpoint_config = config['checkpoint']
     checkpoint_enabled = checkpoint_config.get('enable', True)
     
+    # Check if validation is enabled
+    enable_validation = config.get('training', {}).get('enable_validation', True)
+    
     checkpoint_callback = None
     if checkpoint_enabled:
         checkpoint_dir = checkpoint_config['dir']
@@ -440,21 +465,35 @@ def main():
         if rank == 0:
             os.makedirs(checkpoint_dir, exist_ok=True)
         
-        # Configure ModelCheckpoint to avoid distributed broadcast issues
-        # Use save_on_train_epoch_end=False to save only after validation
+        # Configure ModelCheckpoint based on whether validation is enabled
+        if enable_validation:
+            # When validation is enabled, monitor val_loss and save after validation
+            monitor_metric = checkpoint_config.get('monitor', 'val_loss')
+            filename_template = f"{checkpoint_prefix}-{{epoch:02d}}-{{val_loss:.4f}}"
+            save_on_train_epoch_end = False  # Save only after validation to avoid broadcast issues
+        else:
+            # When validation is disabled, monitor train_loss and save after training epoch
+            monitor_metric = checkpoint_config.get('monitor', 'train_loss')
+            filename_template = f"{checkpoint_prefix}-{{epoch:02d}}-{{train_loss:.4f}}"
+            save_on_train_epoch_end = True  # Save after training epoch since there's no validation
+        
         # Use custom DistributedModelCheckpoint to avoid file existence broadcast errors
         checkpoint_callback = DistributedModelCheckpoint(
             dirpath=checkpoint_dir,
-            filename=f"{checkpoint_prefix}-{{epoch:02d}}-{{val_loss:.4f}}",
-            monitor=checkpoint_config.get('monitor', 'val_loss'),
-            mode='min',  # Minimize validation loss
+            filename=filename_template,
+            monitor=monitor_metric,
+            mode='min',  # Minimize loss
             save_top_k=checkpoint_config.get('save_top_k', 3),
             save_last=True,  # Always save last checkpoint
             verbose=True,
             every_n_epochs=1,
-            save_on_train_epoch_end=False  # Save only after validation to avoid broadcast issues
+            save_on_train_epoch_end=save_on_train_epoch_end
         )
         print(f"Checkpoint saving enabled. Checkpoints will be saved to: {checkpoint_dir}")
+        if enable_validation:
+            print(f"  Monitoring: {monitor_metric} (saving after validation)")
+        else:
+            print(f"  Monitoring: {monitor_metric} (saving after training epoch)")
     else:
         print("Checkpoint saving disabled. No model weights will be saved.")
     
@@ -476,6 +515,14 @@ def main():
         callbacks_list.append(checkpoint_callback)
     
     # Create trainer
+    # Set check_val_every_n_epoch based on whether validation is enabled
+    # PyTorch Lightning will skip validation if val_loader is None, but setting this
+    # to a large number when validation is disabled provides clarity
+    if enable_validation:
+        check_val_every_n_epoch = config.get('training', {}).get('check_val_every_n_epoch', 1)
+    else:
+        check_val_every_n_epoch = 999  # Large number to effectively disable validation checks
+    
     trainer = pl.Trainer(
         max_epochs=config['training']['max_epochs'],
         accelerator='auto' if torch.cuda.is_available() else 'cpu',
@@ -488,13 +535,16 @@ def main():
         enable_model_summary=True,
         precision='16-mixed' if torch.cuda.is_available() else '32',  # Use mixed precision on GPU
         gradient_clip_val=config.get('training', {}).get('gradient_clip_val', 0),
-        check_val_every_n_epoch=config.get('training', {}).get('check_val_every_n_epoch', 1)
+        check_val_every_n_epoch=check_val_every_n_epoch
     )
     
     # Start training
     print("Starting training...")
+    if val_loader is None:
+        print("Validation is disabled - training only mode")
     # Pass checkpoint path to fit() method instead of Trainer constructor
     # This is the correct way in newer PyTorch Lightning versions
+    # PyTorch Lightning will skip validation if val_loader is None
     trainer.fit(model, train_loader, val_loader, ckpt_path=args.resume if args.resume else None)
     
     print("Training completed!")
