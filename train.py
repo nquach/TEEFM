@@ -6,6 +6,7 @@ PyTorch Lightning model, and trainer for training VideoMAE models.
 """
 
 import os
+import time
 import warnings
 import yaml
 import torch
@@ -98,7 +99,7 @@ def setup_litdata_cache_dirs(config):
     
     Uses shared cache directories (same for all processes) instead of per-process caches.
     Litdata's StreamingDataset has built-in synchronization mechanisms to handle concurrent
-    access safely. Only rank 0 creates the directories to avoid race conditions.
+    access safely. In ddp_spawn mode, all processes need to ensure directories exist.
     
     Args:
         config (dict): Configuration dictionary containing cache directory paths
@@ -112,10 +113,10 @@ def setup_litdata_cache_dirs(config):
     base_train_cache = data_config.get('cache_dir', './output/cache')
     base_val_cache = data_config.get('val_cache_dir', './output/val_cache')
     
-    # Use shared cache directories (same for all processes)
-    # Litdata handles synchronization internally
-    train_cache_dir = base_train_cache
-    val_cache_dir = base_val_cache
+    # Convert to absolute paths to ensure consistency across all processes
+    # This is especially important in ddp_spawn where processes may have different working directories
+    train_cache_dir = str(Path(base_train_cache).resolve())
+    val_cache_dir = str(Path(base_val_cache).resolve())
     
     # Detect process rank for multi-GPU training
     # PyTorch Lightning sets LOCAL_RANK and RANK environment variables before spawning processes
@@ -134,11 +135,29 @@ def setup_litdata_cache_dirs(config):
             # Single GPU or distributed not available
             rank = 0
     
-    # Only create cache directories on rank 0 to avoid race conditions
-    # Other ranks will wait for litdata to handle synchronization
-    if rank == 0:
+    # Create cache directories on all ranks
+    # os.makedirs with exist_ok=True is safe for concurrent calls from multiple processes
+    # In ddp_spawn, each process is separate, so all need to ensure directories exist
+    try:
         os.makedirs(train_cache_dir, exist_ok=True)
         os.makedirs(val_cache_dir, exist_ok=True)
+    except OSError as e:
+        # If directory creation fails, log and re-raise
+        print(f"Process rank {rank}: Failed to create cache directories: {e}")
+        raise
+    
+    # Verify directories exist (with a small retry for ddp_spawn synchronization)
+    max_retries = 5
+    for retry in range(max_retries):
+        if os.path.exists(train_cache_dir) and os.path.exists(val_cache_dir):
+            break
+        if retry < max_retries - 1:
+            time.sleep(0.1)  # Small delay before retry
+        else:
+            raise RuntimeError(
+                f"Process rank {rank}: Cache directories do not exist after creation: "
+                f"train={train_cache_dir}, val={val_cache_dir}"
+            )
     
     print(f"Process rank {rank}: Using shared cache directories:")
     print(f"  Train cache: {train_cache_dir}")
