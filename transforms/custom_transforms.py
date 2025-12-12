@@ -10,33 +10,7 @@ import torch.nn as nn
 import numpy as np
 from masking_generator import TubeMaskingGenerator, RandomMaskingGenerator
 import random
-
-
-class VideoNormalize(object):
-    """
-    Normalize video tensor using custom mean and standard deviation.
-    
-    Args:
-        mean (list): Mean values for each channel [R, G, B]
-        std (list): Standard deviation values for each channel [R, G, B]
-    """
-    
-    def __init__(self, mean, std):
-        self.mean = torch.tensor(mean).view(3, 1, 1, 1)  # [C, 1, 1, 1] for broadcasting
-        self.std = torch.tensor(std).view(3, 1, 1, 1)
-    
-    def __call__(self, video):
-        """
-        Normalize video tensor.
-        
-        Args:
-            video (torch.Tensor): Video tensor of shape [C, T, H, W]
-            
-        Returns:
-            torch.Tensor: Normalized video tensor
-        """
-        
-        return (video - self.mean) / self.std
+from torchvision.transforms.v2 import Normalize, RandomResizedCrop, Compose
 
 
 class DataAugmentationForVideoMAE(object):
@@ -64,7 +38,10 @@ class DataAugmentationForVideoMAE(object):
         window_size=(8, 14, 14),  # (frames, height_patches, width_patches)
         mask_type='motion-centric',
         mask_ratio=0.9,
-        motion_centric_masking_ratio=0.7
+        motion_centric_masking_ratio=0.7,
+        crop_scale=(0.75,1.0),
+        crop_aspect_ratio=(0.8,1.2),
+        frame_size=224
     ):
         self.normalize_mean = normalize_mean
         self.normalize_std = normalize_std
@@ -74,7 +51,12 @@ class DataAugmentationForVideoMAE(object):
         self.motion_centric_masking_ratio = motion_centric_masking_ratio
         
         # Initialize normalizer
-        self.normalizer = VideoNormalize(normalize_mean, normalize_std)
+        self.normalizer = Normalize(normalize_mean, normalize_std)
+        self.train_augmentation = RandomResizedCrop(size=frame_size, scale=crop_scale, ratio=crop_aspect_ratio)
+        self.transform = Compose([
+            self.train_augmentation,
+            self.normalizer
+            ])
         
         # Initialize masking generator based on mask type
         self.mcm = False  # Motion-centric masking flag
@@ -107,19 +89,14 @@ class DataAugmentationForVideoMAE(object):
         """
 
         # Normalize video
-        normalized_video = self.normalizer(video)
+        normalized_video, _ = self.transform(video)
         
         # Generate mask if not motion-centric
         if self.mcm:
             # Motion-centric masking is handled by the model
             # Return 0 as placeholder (model will generate mask internally)
             return normalized_video, 0
-        else:
-            # Generate mask using the masking generator
-            mask = self.masked_position_generator()
-            # Convert numpy array to torch tensor
-            mask = torch.from_numpy(mask).bool()
-            return normalized_video, mask
+        return normalized_video, self.masked_position_generator()      
     
     def __repr__(self):
         """String representation of the transform."""

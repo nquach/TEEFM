@@ -8,7 +8,8 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 from einops import rearrange
-from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+from torchmetrics import MeanSquaredError
+import sys
 
 from modeling.model_factory import create_videomae_model
 from optimizers.schedule_free_optimizer import create_schedule_free_optimizer
@@ -54,7 +55,7 @@ class VideoMAELightningModule(pl.LightningModule):
         )
         
         # Loss function (MSE for reconstruction)
-        self.criterion = nn.MSELoss()
+        self.criterion = MeanSquaredError()
         
         # Get patch size from model
         self.patch_size = self.model.encoder.patch_embed.patch_size[0]
@@ -70,9 +71,6 @@ class VideoMAELightningModule(pl.LightningModule):
         
         # Window size for masking (will be set in setup)
         self.window_size = None
-        
-        # Store optimizer reference for train/eval mode switching (required for schedule-free optimizers)
-        self._optimizer = None
     
     def setup(self, stage=None):
         """
@@ -105,18 +103,6 @@ class VideoMAELightningModule(pl.LightningModule):
         """
         return self.model(x, mask)
     
-    def on_train_start(self):
-        """Called at the beginning of training."""
-        # Set optimizer to training mode (required for schedule-free optimizers)
-        if self._optimizer is not None and hasattr(self._optimizer, 'train'):
-            self._optimizer.train()
-    
-    def on_validation_start(self):
-        """Called at the beginning of validation."""
-        # Set optimizer to evaluation mode (required for schedule-free optimizers)
-        if self._optimizer is not None and hasattr(self._optimizer, 'eval'):
-            self._optimizer.eval()
-    
     def on_before_optimizer_step(self, optimizer):
         """
         Hook called before each optimizer.step() call.
@@ -140,10 +126,6 @@ class VideoMAELightningModule(pl.LightningModule):
         Returns:
             torch.Tensor: Loss value
         """
-        # Ensure optimizer is in train mode (safeguard for schedule-free optimizers)
-        if self._optimizer is not None and hasattr(self._optimizer, 'train'):
-            self._optimizer.train()
-        
         videos, bool_masked_pos = batch
         
         # Handle mask based on mask type
@@ -154,8 +136,8 @@ class VideoMAELightningModule(pl.LightningModule):
         with torch.no_grad():
             # Get normalization values from data config
             data_config = self.hparams.get('data', {})
-            mean = torch.as_tensor(data_config.get('normalize_mean', [0.117, 0.114, 0.113])).to(videos.device)
-            std = torch.as_tensor(data_config.get('normalize_std', [0.208, 0.204, 0.203])).to(videos.device)
+            mean = torch.as_tensor(data_config.get('normalize_mean', [0.117, 0.114, 0.113])).to(self.device)
+            std = torch.as_tensor(data_config.get('normalize_std', [0.208, 0.204, 0.203])).to(self.device)
             
             # Unnormalize videos to get original pixel values
             unnorm_videos = videos * std[None, :, None, None, None] + mean[None, :, None, None, None]
@@ -201,9 +183,12 @@ class VideoMAELightningModule(pl.LightningModule):
         
         # Compute loss
         loss = self.criterion(outputs, labels)
+        if not torch.isfinite(loss).all():
+            print("Loss is infinite or NaN, stopping training")
+            sys.exit(1)
         
         # Log training loss
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         
         return loss
     
@@ -225,76 +210,6 @@ class VideoMAELightningModule(pl.LightningModule):
             if param_count > 0:
                 total_norm = total_norm ** 0.5
                 self.log('grad_norm', total_norm, on_step=True, on_epoch=False, logger=True)
-    
-    def validation_step(self, batch, batch_idx):
-        """
-        Validation step for one batch.
-        
-        Args:
-            batch: Batch of data containing (videos, masks)
-            batch_idx: Index of the batch
-        
-        Returns:
-            torch.Tensor: Loss value
-        """
-        videos, bool_masked_pos = batch
-        
-        # Handle mask based on mask type
-        if self.mask_type != 'motion-centric' and bool_masked_pos is not None:
-            bool_masked_pos = bool_masked_pos.flatten(1).to(torch.bool)
-        
-        # Prepare targets (same as training)
-        with torch.no_grad():
-            # Get normalization values from data config
-            data_config = self.hparams.get('data', {})
-            mean = torch.as_tensor(data_config.get('normalize_mean', [0.117, 0.114, 0.113])).to(videos.device)
-            std = torch.as_tensor(data_config.get('normalize_std', [0.208, 0.204, 0.203])).to(videos.device)
-            
-            unnorm_videos = videos * std[None, :, None, None, None] + mean[None, :, None, None, None]
-            
-            if self.normalize_target:
-                videos_squeeze = rearrange(
-                    unnorm_videos,
-                    'b c (t p0) (h p1) (w p2) -> b (t h w) (p0 p1 p2) c',
-                    p0=2,
-                    p1=self.patch_size,
-                    p2=self.patch_size
-                )
-                videos_norm = (
-                    videos_squeeze - videos_squeeze.mean(dim=-2, keepdim=True)
-                ) / (videos_squeeze.var(dim=-2, unbiased=True, keepdim=True).sqrt() + 1e-6)
-                videos_patch = rearrange(videos_norm, 'b n p c -> b n (p c)')
-            else:
-                videos_patch = rearrange(
-                    unnorm_videos,
-                    'b c (t p0) (h p1) (w p2) -> b (t h w) (p0 p1 p2 c)',
-                    p0=2,
-                    p1=self.patch_size,
-                    p2=self.patch_size
-                )
-            
-            B, _, C = videos_patch.shape
-            
-            # Get labels based on mask type
-            if self.mask_type != 'motion-centric' and bool_masked_pos is not None:
-                labels = videos_patch[bool_masked_pos].reshape(B, -1, C)
-        
-        # Forward pass
-        outputs, masks = self.model(videos, bool_masked_pos)
-        
-        # Get labels for motion-centric masking
-        if self.mask_type == 'motion-centric':
-            _, mc_target_mask = masks
-            labels = videos_patch[~mc_target_mask].reshape(B, -1, C)
-        
-        # Compute loss
-        loss = self.criterion(outputs, labels)
-        
-        # Log validation loss
-        # sync_dist=True ensures metric is aggregated across all devices in distributed training
-        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-        #self.log('val_loss', loss, sync_dist=True, reduce_fx='mean')
-        return loss
     
     def configure_optimizers(self):
         """

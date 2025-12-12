@@ -41,24 +41,24 @@ class OptimizedVideoDataset(StreamingDataset):
     def __init__(
         self,
         data_dir,
-        frames_to_sample=32,
-        temporal_stride=2,
+        frames_to_sample=16,
+        temporal_stride=1,
         subset_ratio=None,
         seed=None,
         transform=None,
         cache_dir=None,
         max_cache_size='50GB',
-        custom_drop_last=False
+        drop_last=False
     ):
         # Initialize parent StreamingDataset class
         # StreamingDataset is initialized with data_dir
         try:
             if subset_ratio is not None:
                 super().__init__(input_dir=Dir(path=cache_dir, url=data_dir), 
-                transform=None, subsample=subset_ratio, drop_last=custom_drop_last, max_cache_size=max_cache_size)
+                transform=None, subsample=subset_ratio, drop_last=drop_last, max_cache_size=max_cache_size)
             else:
                 super().__init__(input_dir=Dir(path=cache_dir, url=data_dir), 
-                transform=None, drop_last=custom_drop_last, max_cache_size=max_cache_size)
+                transform=None, drop_last=drop_last, max_cache_size=max_cache_size)
         except Exception as e:
             raise RuntimeError(
                 f"Failed to initialize StreamingDataset from {data_dir}. "
@@ -69,9 +69,6 @@ class OptimizedVideoDataset(StreamingDataset):
         self.frames_to_sample = frames_to_sample
         self.temporal_stride = temporal_stride
         self.custom_transform = transform 
-        self.max_retries = 3  # Maximum number of retries for corrupted chunks
-        self.retry_delay = 0.1  # Delay between retries in seconds
-        
         print(f"Loaded optimized dataset from {data_dir}")
     
     def __getitem__(self, idx):
@@ -89,82 +86,15 @@ class OptimizedVideoDataset(StreamingDataset):
         # Extract actual index from ChunkedIndex if needed
         # StreamingDataLoader passes ChunkedIndex objects, regular DataLoader passes integers
 
-        # Load data from parent StreamingDataset with error handling and retry logic
-        # The optimized dataset returns a dict with "path" and "video" keys
-        # Retry on ValueError and RuntimeError (corrupted chunk errors) up to max_retries times
-        # Handles offset unpacking errors, deserialization errors, and tensor shape errors
-        data = None
-        last_error = None
+        data = super().__getitem__(idx)
         
-        for attempt in range(self.max_retries):
-            try:
-                data = super().__getitem__(idx)
-                break  # Success, exit retry loop
-            except ValueError as e:
-                # Check if this is a corrupted chunk error (offset unpacking or deserialization)
-                error_msg = str(e)
-                is_offset_error = "not enough values to unpack" in error_msg or "expected" in error_msg
-                is_deserialization_error = "treespec" in error_msg or "leaves" in error_msg or "pytree" in error_msg
-                
-                if is_offset_error or is_deserialization_error:
-                    last_error = e
-                    if attempt < self.max_retries - 1:
-                        # Wait a bit before retrying to allow cache to be updated
-                        time.sleep(self.retry_delay * (attempt + 1))
-                        continue
-                    else:
-                        # Max retries reached, raise with informative error
-                        raise RuntimeError(
-                            f"Failed to load data at index {idx} after {self.max_retries} retries. "
-                            f"This may indicate a corrupted chunk in the cache. "
-                            f"Original error: {error_msg}"
-                        ) from e
-                else:
-                    # Different ValueError, re-raise immediately
-                    raise
-            except RuntimeError as e:
-                # Check if this is a tensor deserialization error (shape mismatch)
-                error_msg = str(e)
-                is_shape_error = "shape" in error_msg and ("invalid for input" in error_msg or "reshape" in error_msg)
-                
-                if is_shape_error:
-                    last_error = e
-                    if attempt < self.max_retries - 1:
-                        # Wait a bit before retrying to allow cache to be updated
-                        time.sleep(self.retry_delay * (attempt + 1))
-                        continue
-                    else:
-                        # Max retries reached, raise with informative error
-                        raise RuntimeError(
-                            f"Failed to load data at index {idx} after {self.max_retries} retries. "
-                            f"This may indicate a corrupted chunk in the cache (tensor shape mismatch). "
-                            f"Original error: {error_msg}"
-                        ) from e
-                else:
-                    # Different RuntimeError, re-raise immediately
-                    raise
-            except Exception as e:
-                # Other exceptions, re-raise immediately
-                raise
-        
-        if data is None:
-            raise RuntimeError(f"Failed to load data at index {idx} after {self.max_retries} retries")
-        
-        video = data['video']
+        video = data['video'] #TCHW format
 
-        num_frames = video.shape[0]
-        
-        # Check if video has enough frames
-        if num_frames < self.frames_to_sample:
-            # If video is too short, repeat the last frame
-            padding_needed = self.frames_to_sample - num_frames
-            last_frame = video[-1:].repeat(padding_needed, 1, 1, 1)
-            video = torch.cat([video, last_frame], dim=0)
-            num_frames = video.shape[0]
+        num_frames = video.shape[0] #
         
         # Randomly sample consecutive frames
         max_start = num_frames - self.frames_to_sample
-        if max_start < 0:
+        if max_start <= 0:
             start_frame = 0
         else:
             start_frame = random.randint(0, max_start)
@@ -174,14 +104,7 @@ class OptimizedVideoDataset(StreamingDataset):
         
         # Temporal downsampling with stride
         downsampled_frames = sampled_frames[::self.temporal_stride]
-        
-        # Convert from [T, H, W, C] to [C, T, H, W]
-        video_tensor = downsampled_frames.permute(3, 0, 1, 2).float()
-        
-        # Normalize to [0, 1] if not already (read_video returns uint8 [0, 255])
-        max_val = video_tensor.max().item() if video_tensor.numel() > 0 else 0.0
-        if max_val > 1.0:
-            video_tensor = video_tensor / 255.0
+        video_tensor = torch.as_tensor(downsampled_frames)
         
         # Apply transform if provided (for masking, normalization, etc.)
         if self.custom_transform is not None:

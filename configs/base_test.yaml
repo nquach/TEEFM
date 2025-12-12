@@ -3,24 +3,12 @@
 
 # Dataset configuration
 data:
-  # Whether to use optimized litdata datasets (created with optimize_dataset.py)
-  # Set to true to use StreamingDataset and StreamingDataLoader
-  use_optimized: true
-  # Path to optimized training dataset directory (only used if use_optimized is true)
   train_optimized_dir: 's3://tee-2023-2024/opt_val1k_mp4-2023-2024_compressed_v2'
   # Path to optimized validation dataset directory (only used if use_optimized is true)
   val_optimized_dir: 's3://tee-2023-2024/opt_val1k_mp4-2023-2024_compressed_v2'
   # Path to cache directory for optimized datasets
   cache_dir: "./output/cache"
   # Path to CSV file containing training video paths (one path per line)
-  val_cache_dir: "./output/val_cache"
-  # Only used if use_optimized is false
-  train_csv: "mp4_paths.csv"
-  # Path to CSV file containing validation video paths (one path per line)
-  # Only used if use_optimized is false
-  val_csv: "val500_2023-2024.csv"
-  # Optional: Use a random subset of the training dataset (null to use full dataset)
-  # Value should be a float between 0 and 1, e.g., 0.1 for 10% of the dataset
   subset_ratio: null
   # Custom normalization values for the dataset
   # These replace the default ImageNet normalization
@@ -49,6 +37,10 @@ model:
   input_size: 224
   # Patch size for the Vision Transformer
   patch_size: 16
+  #RandomResizeCrop crop area ratio range
+  crop_ratio: (0.75,1.0)
+  #RandomResizeCrop crop aspect ratio range
+  crop_aspect_ratio: (0.8,1.2)
 
 # Training configuration
 training:
@@ -65,15 +57,12 @@ training:
   # Number of frames to sample from each video (before downsampling)
   num_frames: 16
   # Temporal stride for downsampling (2 means every other frame)
-  temporal_stride: 2
+  temporal_stride: 1
   # Number of consecutive frames to sample before downsampling
-  frames_to_sample: 32
-  # Check validation every N epochs
-  check_val_every_n_epoch: 1
-  # Whether to enable validation (set to false to skip validation entirely)
-  enable_validation: true
+  frames_to_sample: 16
   # Gradient clip value
   gradient_clip_val: 0
+
 # Optimizer configuration (Schedule-Free Optimizers)
 optimizer:
   # Optimizer type: "adamw" (AdamWScheduleFree) or "radam" (RAdamScheduleFree)
@@ -99,9 +88,9 @@ checkpoint:
   # Prefix for checkpoint filenames
   prefix: "videomae_VitS_radam_basetest_"
   # Number of best checkpoints to keep
-  save_top_k: 3
+  save_top_k: 1
   # Metric to monitor for saving best checkpoints
-  monitor: "val_loss"
+  monitor: "train_loss"
   # Save checkpoints every N epochs (in addition to best checkpoints)
   save_ckpt_freq: 50
 
