@@ -7,7 +7,7 @@ data:
   # Path to cache directory for optimized datasets
   cache_dir: "./output/cache"
   # Path to CSV file containing training video paths (one path per line)
-  subset_ratio: 0.01
+  subset_ratio: 0.1
   # Custom normalization values for the dataset
   # These replace the default ImageNet normalization
   normalize_mean: [0.117, 0.114, 0.113]
