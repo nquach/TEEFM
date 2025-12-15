@@ -36,9 +36,9 @@ model:
   # Patch size for the Vision Transformer
   patch_size: 16
   #RandomResizeCrop crop area ratio range
-  crop_scale: (0.75,1.0)
+  crop_scale: [0.75,1.0]
   #RandomResizeCrop crop aspect ratio range
-  crop_aspect_ratio: (0.8,1.2)
+  crop_aspect_ratio: [0.8,1.2]
 
 # Training configuration
 training:
