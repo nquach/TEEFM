@@ -152,7 +152,7 @@ def create_data_loaders(train_dataset, config):
         persistent_workers=True if is_ddp else False,
     )
 
-    return train_loader, val_loader
+    return train_loader
 
 
 def main():
@@ -181,9 +181,7 @@ def main():
     
     # Set random seed for reproducibility
     seed = config['training'].get('seed', 0)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    pl.seed_everything(seed, workers=True)
     
     # Create datasets
     print("Creating datasets...")
@@ -211,6 +209,7 @@ def main():
     checkpoint_callback = None
     if checkpoint_enabled:
         checkpoint_dir = checkpoint_config['dir']
+        os.makedirs(checkpoint_dir, exist_ok=True)
         checkpoint_prefix = checkpoint_config['prefix']
         checkpoint_callback = ModelCheckpoint(
             monitor=checkpoint_config.get('monitor', 'train_loss'),
@@ -249,7 +248,7 @@ def main():
         logger=logger,
         log_every_n_steps=logging_config.get('log_freq', 10),
         precision='16-mixed' if torch.cuda.is_available() else '32',  # Use mixed precision on GPU
-        gradient_clip_val=config.get('training', {}).get('gradient_clip_val', 0),
+        gradient_clip_val=config['training'].get('gradient_clip_val', 0)
     )
     
     # Start training
