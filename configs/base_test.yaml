@@ -3,9 +3,7 @@
 
 # Dataset configuration
 data:
-  train_optimized_dir: 's3://tee-2023-2024/opt_val1k_mp4-2023-2024_compressed_v2'
-  # Path to optimized validation dataset directory (only used if use_optimized is true)
-  val_optimized_dir: 's3://tee-2023-2024/opt_val1k_mp4-2023-2024_compressed_v2'
+  train_optimized_dir: 's3://tee-2023-2024/opt_mp4-2023-2024'
   # Path to cache directory for optimized datasets
   cache_dir: "./output/cache"
   # Path to CSV file containing training video paths (one path per line)
@@ -49,7 +47,7 @@ training:
   # Number of data loading workers
   num_workers: 8
   # Maximum number of training epochs
-  max_epochs: 2
+  max_epochs: 1
   # Whether to pin memory in DataLoader (faster GPU transfer)
   pin_memory: true
   # Random seed for reproducibility
