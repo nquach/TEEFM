@@ -110,10 +110,10 @@ class OptimizedVideoDataset(StreamingDataset):
         
         # Apply transform if provided (for masking, normalization, etc.)
         if self.custom_transform is not None:
-            video_tensor, mask = self.custom_transform(video_tensor)
+            video_tensor, mask = self.custom_transform(video_tensor.permute(0,3,1,2)) #THWC -> TCHW
             return video_tensor, mask
 
         # Return video and None mask (mask will be generated elsewhere)
-        return video_tensor, None
+        return video_tensor.permute(3,0,1,2), None #TCHW -> CTHW
     
 
