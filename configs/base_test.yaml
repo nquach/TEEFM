@@ -17,7 +17,7 @@ data:
 # Model configuration
 model:
   # Backbone architecture: "vit-s" (small), "vit-b" (base), "vit-l" (large), or "vit-h" (huge)
-  backbone: "vit-s"
+  backbone: "vit-h"
   # Path to pretrained checkpoint file (null for random initialization)
   pretrained_path: null
   # Decoder depth for the VideoMAE model
@@ -44,9 +44,9 @@ model:
 # Training configuration
 training:
   # Batch size per GPU
-  batch_size: 32
+  batch_size: 16
   # Number of data loading workers
-  num_workers: 4
+  num_workers: 12
   # Maximum number of training epochs
   max_epochs: 1
   # Whether to pin memory in DataLoader (faster GPU transfer)

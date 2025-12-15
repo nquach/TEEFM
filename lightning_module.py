@@ -111,9 +111,16 @@ class VideoMAELightningModule(pl.LightningModule):
         Args:
             optimizer: The optimizer being stepped
         """
+        # Handle DeepSpeed-wrapped optimizers
+        # DeepSpeed wraps the optimizer, so we need to access the underlying optimizer
+        actual_optimizer = optimizer
+        if hasattr(optimizer, 'optimizer'):
+            # DeepSpeed wraps the optimizer in an .optimizer attribute
+            actual_optimizer = optimizer.optimizer
+        
         # Set optimizer to training mode before each step (required for schedule-free optimizers)
-        if hasattr(optimizer, 'train'):
-            optimizer.train()
+        if hasattr(actual_optimizer, 'train'):
+            actual_optimizer.train()
     
     def training_step(self, batch, batch_idx):
         """
