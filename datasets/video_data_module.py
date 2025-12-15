@@ -135,7 +135,7 @@ class VideoDataModule(pl.LightningDataModule):
             shuffle=True,
             num_workers=self.training_config.get('num_workers', 10),
             pin_memory=self.training_config.get('pin_memory', True),
-            persistent_workers=True if is_ddp else False,
+            persistent_workers=False,
         )
         
         return train_loader
