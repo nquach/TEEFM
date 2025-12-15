@@ -2,7 +2,7 @@
 Model Factory for VideoMAE Models
 
 This module provides a factory function to create VideoMAE models with different
-backbone architectures (ViT-S, ViT-B, ViT-L) and supports loading pretrained weights.
+backbone architectures (ViT-S, ViT-B, ViT-L, ViT-H) and supports loading pretrained weights.
 """
 
 import torch
@@ -24,7 +24,7 @@ def create_videomae_model(
     Create a VideoMAE model with the specified backbone architecture.
     
     Args:
-        backbone (str): Backbone architecture - 'vit-s', 'vit-b', or 'vit-l'
+        backbone (str): Backbone architecture - 'vit-s', 'vit-b', 'vit-l', or 'vit-h'
         pretrained_path (str, optional): Path to pretrained checkpoint file
         decoder_depth (int): Depth of the decoder (default: 4)
         drop_path (float): Drop path rate for regularization (default: 0.0)
@@ -37,13 +37,14 @@ def create_videomae_model(
         torch.nn.Module: VideoMAE model instance
     
     Raises:
-        ValueError: If backbone is not one of 'vit-s', 'vit-b', 'vit-l'
+        ValueError: If backbone is not one of 'vit-s', 'vit-b', 'vit-l', 'vit-h'
     """
     # Map backbone names to model registration names
     backbone_map = {
         'vit-s': 'pretrain_videoms_small_patch16_224',
         'vit-b': 'pretrain_videoms_base_patch16_224',
-        'vit-l': 'pretrain_videoms_large_patch16_224'
+        'vit-l': 'pretrain_videoms_large_patch16_224',
+        'vit-h': 'pretrain_videoms_huge_patch16_224'
     }
     
     if backbone.lower() not in backbone_map:
@@ -115,7 +116,7 @@ def get_model_info(backbone):
     Get information about a model architecture.
     
     Args:
-        backbone (str): Backbone architecture - 'vit-s', 'vit-b', or 'vit-l'
+        backbone (str): Backbone architecture - 'vit-s', 'vit-b', 'vit-l', or 'vit-h'
     
     Returns:
         dict: Dictionary containing model information (embed_dim, depth, num_heads, etc.)
@@ -142,6 +143,14 @@ def get_model_info(backbone):
             'depth': 24,
             'num_heads': 16,
             'decoder_embed_dim': 512,
+            'decoder_depth': 4,
+            'decoder_num_heads': 8
+        },
+        'vit-h': {
+            'embed_dim': 1280,
+            'depth': 32,
+            'num_heads': 16,
+            'decoder_embed_dim': 640,
             'decoder_depth': 4,
             'decoder_num_heads': 8
         }

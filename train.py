@@ -129,7 +129,7 @@ def main():
         max_epochs=config['training']['max_epochs'],
         accelerator='gpu' if torch.cuda.is_available() else 'cpu',
         devices='auto',  # Use all available GPUs
-        strategy='ddp' if torch.cuda.device_count() > 1 else 'auto',
+        strategy=config['training'].get('strategy', 'ddp') if torch.cuda.device_count() > 1 else 'auto',
         callbacks=callbacks_list if callbacks_list else None,
         logger=logger,
         log_every_n_steps=logging_config.get('log_freq', 10),
