@@ -20,14 +20,8 @@ from pathlib import Path
 warnings.filterwarnings('ignore', category=UserWarning, module='torchvision')
 warnings.filterwarnings('ignore', category=FutureWarning, module='torchvision')
 
-from datasets.optimized_video_dataset import OptimizedVideoDataset
-from transforms.custom_transforms import DataAugmentationForVideoMAE
+from datasets import VideoDataModule
 from lightning_module import VideoMAELightningModule
-from litdata import StreamingDataLoader
-
-def safe_makedir(path):
-    if not os.path.exists(path):
-        os.makedirs(path)
 
 def load_config(config_path):
     """
@@ -47,113 +41,6 @@ def load_config(config_path):
     
     return config
 
-def create_datasets(config):
-    """
-    Create training and validation datasets.
-    
-    Supports both regular CSV-based datasets and optimized litdata datasets.
-    
-    Args:
-        config (dict): Configuration dictionary
-        train_cache_dir (str, optional): Unique cache directory for training dataset (for multi-GPU)
-    
-    Returns:
-        tuple: (train_dataset, val_dataset, use_optimized) where val_dataset can be None if validation is disabled
-    """
-    data_config = config['data']
-    model_config = config['model']
-    training_config = config['training']
-    
-    # Get normalization values
-    normalize_mean = data_config.get('normalize_mean', [0.117, 0.114, 0.113])
-    normalize_std = data_config.get('normalize_std', [0.208, 0.204, 0.203])
-    
-    # Calculate window size for masking
-    num_frames = training_config.get('num_frames', 16)
-    input_size = model_config.get('input_size', 224)
-    patch_size = model_config.get('patch_size', 16)
-    
-    # Window size: (frames, height_patches, width_patches)
-    # After tubelet_size=2, temporal dimension is num_frames // 2
-    window_size = (
-        num_frames // 2,
-        input_size // patch_size,
-        input_size // patch_size
-    )
-    
-    # Create transform
-    transform = DataAugmentationForVideoMAE(
-        normalize_mean=normalize_mean,
-        normalize_std=normalize_std,
-        window_size=window_size,
-        mask_type=model_config.get('mask_type', 'motion-centric'),
-        mask_ratio=model_config.get('mask_ratio', 0.9),
-        motion_centric_masking_ratio=model_config.get('motion_centric_masking_ratio', 0.7),
-        frame_size=input_size,
-        crop_scale=model_config.get('crop_scale', (0.75,1.0)),
-        crop_aspect_ratio=model_config.get('crop_aspect_ratio', (0.8,1.2))
-    )
-    
-    train_data_dir = data_config.get('train_optimized_dir')
-    
-    if train_data_dir is None:
-        raise ValueError(
-            "use_optimized is True but train_optimized_dir or val_optimized_dir is not specified. "
-            "Please provide paths to optimized dataset directories."
-        )
-        
-    print("Using optimized litdata datasets")
-        
-    train_cache = data_config.get('cache_dir')
-    safe_makedir(train_cache)
-    # Create training dataset from optimized data
-    train_dataset = OptimizedVideoDataset(
-        data_dir=train_data_dir,
-        frames_to_sample=training_config.get('frames_to_sample', 16),
-        temporal_stride=training_config.get('temporal_stride', 1),
-        subset_ratio=data_config.get('subset_ratio'),
-        seed=training_config.get('seed', 0),
-        transform=transform,
-        cache_dir=train_cache,
-        max_cache_size=data_config.get('max_cache_size', '50GB'),
-        drop_last=True
-    )
-    print(f'Created optimized training dataset from {train_data_dir} of length {len(train_dataset)}')
-      
-    return train_dataset
-
-
-def create_data_loaders(train_dataset, config):
-    """
-    Create data loaders for training and validation.
-    
-    Uses StreamingDataLoader for optimized datasets, regular DataLoader otherwise.
-    
-    Args:
-        train_dataset: Training dataset
-        config (dict): Configuration dictionary
-    
-    Returns:
-       train_loader
-    """
-    training_config = config['training']
-    batch_size = training_config['batch_size']
-    
-    # Check if we're in DDP mode (will be True if multiple GPUs are available)
-    # In DDP, validation must use drop_last=True to ensure all processes have same number of batches
-    # This prevents deadlock when sync_dist=True synchronizes across processes
-    is_ddp = torch.cuda.device_count() > 1
-            
-    train_loader = StreamingDataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=training_config.get('num_workers', 10),
-        pin_memory=training_config.get('pin_memory', True),
-        persistent_workers=True if is_ddp else False,
-    )
-
-    return train_loader
 
 
 def main():
@@ -184,14 +71,11 @@ def main():
     seed = config['training'].get('seed', 0)
     pl.seed_everything(seed, workers=True)
     
-    # Create datasets
-    print("Creating datasets...")
-    train_dataset = create_datasets(config)
-    print(f"Training dataset size: {len(train_dataset)}")
-    
-    # Create data loaders
-    print("Creating data loaders...")
-    train_loader = create_data_loaders(train_dataset, config)
+    # Create data module
+    print("Creating data module...")
+    data_module = VideoDataModule(config)
+    data_module.setup('fit')
+    print(f"Training dataset size: {len(data_module.train_dataset)}")
     
     # Create Lightning module
     print("Creating model...")
@@ -256,7 +140,7 @@ def main():
     
     # Start training
     print("Starting training...")
-    trainer.fit(model, train_loader, ckpt_path=args.resume if args.resume else None)
+    trainer.fit(model, data_module, ckpt_path=args.resume if args.resume else None)
     
     print("Training completed!")
     if checkpoint_callback is not None:
