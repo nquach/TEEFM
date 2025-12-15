@@ -89,7 +89,7 @@ class DataAugmentationForVideoMAE(object):
         """
 
         # Normalize video
-        normalized_video, _ = self.transform(video)
+        normalized_video = self.transform(video)
         
         # Generate mask if not motion-centric
         if self.mcm:
