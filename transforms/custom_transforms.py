@@ -95,8 +95,8 @@ class DataAugmentationForVideoMAE(object):
         if self.mcm:
             # Motion-centric masking is handled by the model
             # Return 0 as placeholder (model will generate mask internally)
-            return normalized_video, 0
-        return normalized_video, self.masked_position_generator()      
+            return normalized_video.permute(3,0,1,2), 0
+        return normalized_video.permute(3,0,1,2), self.masked_position_generator()      
     
     def __repr__(self):
         """String representation of the transform."""

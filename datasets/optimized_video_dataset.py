@@ -41,8 +41,8 @@ class OptimizedVideoDataset(StreamingDataset):
     def __init__(
         self,
         data_dir,
-        frames_to_sample=32,
-        temporal_stride=2,
+        frames_to_sample=16,
+        temporal_stride=1,
         subset_ratio=None,
         seed=None,
         transform=None,
@@ -103,8 +103,7 @@ class OptimizedVideoDataset(StreamingDataset):
         sampled_frames = video[start_frame:start_frame + self.frames_to_sample]
         
         # Temporal downsampling with stride
-        downsampled_frames = sampled_frames[::self.temporal_stride]
-        video_tensor = downsampled_frames.permute(3, 0, 1, 2).float()
+        video_tensor = sampled_frames[::self.temporal_stride].float()
         max_val = video_tensor.max().item() if video_tensor.numel() > 0 else 0.0
         if max_val > 1.0:
             video_tensor = video_tensor / 255.0
