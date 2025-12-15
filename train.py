@@ -213,9 +213,9 @@ def main():
         os.makedirs(checkpoint_dir, exist_ok=True)
         checkpoint_prefix = checkpoint_config['prefix']
         checkpoint_callback = ModelCheckpoint(
-            monitor=checkpoint_config.get('monitor', 'train_loss'),
+            monitor=checkpoint_config.get('monitor', 'train_loss_epoch'),
             dirpath=checkpoint_dir,
-            filename = f"{checkpoint_prefix}-{{epoch:02d}}-{{train_loss_epoch:.4f}}",
+            filename = checkpoint_prefix + "-{epoch:02d}-{train_loss_epoch:.4f}",
             mode='min',
             save_top_k=checkpoint_config.get('save_top_k', 1),
             verbose=True,

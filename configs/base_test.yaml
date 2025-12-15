@@ -7,7 +7,7 @@ data:
   # Path to cache directory for optimized datasets
   cache_dir: "./output/cache"
   # Path to CSV file containing training video paths (one path per line)
-  subset_ratio: 0.1
+  subset_ratio: 0.01
   # Custom normalization values for the dataset
   # These replace the default ImageNet normalization
   normalize_mean: [0.117, 0.114, 0.113]
@@ -44,7 +44,7 @@ model:
 # Training configuration
 training:
   # Batch size per GPU
-  batch_size: 16
+  batch_size: 32
   # Number of data loading workers
   num_workers: 4
   # Maximum number of training epochs
@@ -87,9 +87,9 @@ checkpoint:
   # Prefix for checkpoint filenames
   prefix: "videomae_VitS_radam_basetest_"
   # Number of best checkpoints to keep
-  save_top_k: 1
+  save_top_k: 3
   # Metric to monitor for saving best checkpoints
-  monitor: "train_loss"
+  monitor: "train_loss_epoch"
   # Save checkpoints every N epochs (in addition to best checkpoints)
   save_ckpt_freq: 50
 
