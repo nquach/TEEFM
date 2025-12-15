@@ -220,7 +220,8 @@ def main():
             save_top_k=checkpoint_config.get('save_top_k', 1),
             verbose=True,
             auto_insert_metric_name=False,
-            every_n_epochs=checkpoint_config.get('save_ckpt_freq', 50)
+            every_n_epochs=checkpoint_config.get('save_ckpt_freq', None),
+            save_on_train_epoch_end=True
         )
     
     # Setup logging

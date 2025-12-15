@@ -91,7 +91,7 @@ checkpoint:
   # Metric to monitor for saving best checkpoints
   monitor: "train_loss_epoch"
   # Save checkpoints every N epochs (in addition to best checkpoints)
-  save_ckpt_freq: 50
+  save_ckpt_freq: null
 
 # Optional features
 features:
