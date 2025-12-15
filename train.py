@@ -215,7 +215,7 @@ def main():
         checkpoint_callback = ModelCheckpoint(
             monitor=checkpoint_config.get('monitor', 'train_loss'),
             dirpath=checkpoint_dir,
-            filename = f"{checkpoint_prefix}-{{epoch:02d}}-{{train_loss:.4f}}",
+            filename = f"{checkpoint_prefix}-{{epoch:02d}}-{{train_loss_epoch:.4f}}",
             mode='min',
             save_top_k=checkpoint_config.get('save_top_k', 1),
             verbose=True,

@@ -188,8 +188,9 @@ class VideoMAELightningModule(pl.LightningModule):
             sys.exit(1)
         
         # Log training loss
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        
+        self.log('train_loss', loss, on_step=True, on_epoch=False, prog_bar=True, logger=True)
+        self.log('train_loss_epoch', loss, on_step=False, on_epoch=True, 
+                                    prog_bar=True, logger=True, sync_dist=True)
         return loss
     
     def on_after_backward(self):
