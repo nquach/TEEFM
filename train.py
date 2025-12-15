@@ -115,6 +115,7 @@ def create_datasets(config):
         seed=training_config.get('seed', 0),
         transform=transform,
         cache_dir=train_cache,
+        max_cache_size=data_config.get('max_cache_size', '50GB'),
         drop_last=True
     )
     print(f'Created optimized training dataset from {train_data_dir} of length {len(train_dataset)}')

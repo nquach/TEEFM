@@ -7,11 +7,12 @@ data:
   # Path to cache directory for optimized datasets
   cache_dir: "./output/cache"
   # Path to CSV file containing training video paths (one path per line)
-  subset_ratio: null
+  subset_ratio: 0.1
   # Custom normalization values for the dataset
   # These replace the default ImageNet normalization
   normalize_mean: [0.117, 0.114, 0.113]
   normalize_std: [0.208, 0.204, 0.203]
+  max_cache_size: '50GB'
 
 # Model configuration
 model:
@@ -43,9 +44,9 @@ model:
 # Training configuration
 training:
   # Batch size per GPU
-  batch_size: 64
+  batch_size: 16
   # Number of data loading workers
-  num_workers: 8
+  num_workers: 4
   # Maximum number of training epochs
   max_epochs: 1
   # Whether to pin memory in DataLoader (faster GPU transfer)
