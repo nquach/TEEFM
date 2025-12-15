@@ -61,6 +61,8 @@ training:
   frames_to_sample: 16
   # Gradient clip value
   gradient_clip_val: 0
+  # Number of gradient accumulation steps
+  accumulate_grad_batches: 4  
 
 # Optimizer configuration (Schedule-Free Optimizers)
 optimizer:

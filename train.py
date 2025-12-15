@@ -250,7 +250,8 @@ def main():
         logger=logger,
         log_every_n_steps=logging_config.get('log_freq', 10),
         precision='16-mixed' if torch.cuda.is_available() else '32',  # Use mixed precision on GPU
-        gradient_clip_val=config['training'].get('gradient_clip_val', 0)
+        gradient_clip_val=config['training'].get('gradient_clip_val', 0),
+        accumulate_grad_batches=config['training'].get('accumulate_grad_batches', 1)
     )
     
     # Start training
