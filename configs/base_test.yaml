@@ -13,6 +13,7 @@ data:
   normalize_mean: [0.117, 0.114, 0.113]
   normalize_std: [0.208, 0.204, 0.203]
   max_cache_size: '50GB'
+  cloud_type: 's3_public'
 
 # Model configuration
 model:

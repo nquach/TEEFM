@@ -118,7 +118,7 @@ class VideoDataModule(pl.LightningDataModule):
                 cache_dir=train_cache,
                 max_cache_size=self.data_config.get('max_cache_size', '50GB'),
                 drop_last=True,
-                storage_options=custom_storage_options
+                storage_options=custom_storage_options if self.data_config.get('cloud_type', 's3_public') == 's3_public' else None
             )
             print(f'Created optimized training dataset from {train_data_dir} of length {len(self.train_dataset)}')
     
