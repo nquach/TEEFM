@@ -13,6 +13,14 @@ from litdata import StreamingDataLoader
 from .optimized_video_dataset import OptimizedVideoDataset
 from transforms.custom_transforms import DataAugmentationForVideoMAE
 
+import botocore
+
+custom_storage_options = {
+    "config": botocore.config.Config(
+        retries={"max_attempts": 1000, "mode": "adaptive"},
+        signature_version=botocore.UNSIGNED,
+    )
+}
 
 def safe_makedir(path):
     """Safely create directory if it doesn't exist."""
@@ -109,7 +117,8 @@ class VideoDataModule(pl.LightningDataModule):
                 transform=self.transform,
                 cache_dir=train_cache,
                 max_cache_size=self.data_config.get('max_cache_size', '50GB'),
-                drop_last=True
+                drop_last=True,
+                storage_options=custom_storage_options
             )
             print(f'Created optimized training dataset from {train_data_dir} of length {len(self.train_dataset)}')
     
