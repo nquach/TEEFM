@@ -105,7 +105,8 @@ def main():
             verbose=True,
             auto_insert_metric_name=False,
             every_n_epochs=checkpoint_config.get('save_ckpt_freq', None),
-            save_on_train_epoch_end=True
+            save_on_train_epoch_end=True,
+            save_last=True
         )
     
     # Setup logging
