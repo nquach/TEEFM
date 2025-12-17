@@ -7,7 +7,7 @@ from tqdm import tqdm
 import argparse
 import pickle as pkl
 
-SELECT_TEMPORAL_INDEX=False
+SELECT_TEMPORAL_INDEX=True
 TEMPORAL_INDEX = 0
 
 def safe_makedir(path):
