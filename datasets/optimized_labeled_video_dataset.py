@@ -93,23 +93,32 @@ class OptimizedLabeledVideoDataset(StreamingDataset):
         
         Returns:
             tuple: (video_tensor, label) where:
-                - video_tensor: Tensor of shape [C, T, H, W] for classification
-                - label: Integer class label
+                - video_tensor: Tensor of shape [C, T, H, W] for classification/regression
+                - label: Integer class label (classification) or float value (regression)
         """
         data = super().__getitem__(idx)
         
         video = data['video']  # TCHW format
         
-        # Extract label from data
+        # Extract label from data and preserve original type (int for classification, float for regression)
         if 'label' in data:
             label = data['label']
-            # Ensure label is a scalar integer
+            # Convert to Python scalar while preserving type (int or float)
             if isinstance(label, torch.Tensor):
-                label = label.item()
+                label = label.item()  # item() preserves type (int or float)
             elif isinstance(label, np.ndarray):
-                label = int(label.item())
+                label = label.item()  # item() preserves type (int or float)
+            elif isinstance(label, (int, float)):
+                label = label  # Already a scalar, preserve type
             else:
-                label = int(label)
+                # Try to convert, preserving numeric type
+                try:
+                    label = float(label)
+                    # If it's a whole number, convert to int for classification compatibility
+                    if label.is_integer():
+                        label = int(label)
+                except (ValueError, TypeError):
+                    raise ValueError(f"Label must be numeric (int or float), got {type(label)}: {label}")
         else:
             raise KeyError(f"Label not found in dataset item. Available keys: {data.keys()}")
         

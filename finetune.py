@@ -91,22 +91,43 @@ def main():
     checkpoint_config = config['checkpoint']
     checkpoint_enabled = checkpoint_config.get('enable', True)
     
+    # Determine task type for checkpoint configuration
+    task_type = config['model'].get('task_type', 'classification').lower()
+    
     checkpoint_callback = None
     if checkpoint_enabled:
         checkpoint_dir = checkpoint_config['dir']
         os.makedirs(checkpoint_dir, exist_ok=True)
         checkpoint_prefix = checkpoint_config['prefix']
+        
+        # Configure checkpoint monitoring based on task type
+        if task_type == 'regression':
+            # For regression: minimize MSE (lower is better)
+            default_monitor = 'val_mse'
+            checkpoint_mode = 'min'
+        else:  # classification
+            # For classification: maximize accuracy (higher is better)
+            default_monitor = 'val_acc1'
+            checkpoint_mode = 'max'
+        
+        # Use configured monitor or default based on task type
+        monitor_metric = checkpoint_config.get('monitor', default_monitor)
+        
         checkpoint_callback = ModelCheckpoint(
-            monitor=checkpoint_config.get('monitor', 'val_acc1'),
+            monitor=monitor_metric,
             dirpath=checkpoint_dir,
             filename=checkpoint_prefix + "-{epoch:02d}",
-            mode='max',  # Maximize validation accuracy
+            mode=checkpoint_mode,  # 'max' for classification, 'min' for regression
             save_top_k=checkpoint_config.get('save_top_k', 1),
             verbose=True,
             auto_insert_metric_name=False,
             every_n_epochs=checkpoint_config.get('save_ckpt_freq', None),
             save_on_train_epoch_end=False  # Save on validation end for finetuning
         )
+        
+        print(f"Checkpoint callback configured for {task_type} task:")
+        print(f"  Monitor: {monitor_metric}")
+        print(f"  Mode: {checkpoint_mode}")
     
     # Setup logging
     logging_config = config.get('logging', {})

@@ -1,5 +1,5 @@
 # Example configuration file for VideoMAE finetuning
-# This configuration file is used for finetuning VideoMAE models on classification tasks
+# This configuration file is used for finetuning VideoMAE models on classification or regression tasks
 
 data:
   # Optimized dataset directories (created with litdata.optimize())
@@ -34,8 +34,19 @@ model:
   # Prefix to add when loading state dict
   model_prefix: ""
   
-  # Number of classes for classification
+  # Task type: "classification" or "regression" (default: "classification")
+  # - "classification": Use CrossEntropyLoss, output num_classes logits, track accuracy metrics
+  # - "regression": Use MSELoss or L1Loss, output output_dim values, track MSE/MAE/R² metrics
+  task_type: "classification"  # Change to "regression" for continuous variable prediction
+  
+  # Number of classes for classification (used when task_type="classification")
   num_classes: 101
+  
+  # Output dimension for regression (used when task_type="regression", default: 1 for single-value regression)
+  output_dim: 1
+  
+  # Regression loss type: "mse" or "l1" (used when task_type="regression", default: "mse")
+  regression_loss: "mse"
   
   # Input image size
   input_size: 224
@@ -164,7 +175,10 @@ checkpoint:
   prefix: "videomae_finetune"
   
   # Metric to monitor for best checkpoint
-  monitor: "val_acc1"  # Monitor validation top-1 accuracy
+  # For classification: "val_acc1" (maximize, mode='max')
+  # For regression: "val_mse" (minimize, mode='min')
+  # The finetune.py script will automatically set mode based on task_type
+  monitor: "val_acc1"  # For classification; use "val_mse" for regression
   
   # Save top K checkpoints
   save_top_k: 1

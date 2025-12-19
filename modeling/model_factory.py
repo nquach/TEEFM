@@ -199,12 +199,14 @@ def create_videomae_finetune_model(
     mcm=False,
     mcm_ratio=0.4,
     model_key='model|module',
-    model_prefix=''
+    model_prefix='',
+    task_type='classification',
+    output_dim=1
 ):
     """
-    Create a VideoMAE finetuning model with classification head.
+    Create a VideoMAE finetuning model with classification or regression head.
     
-    This function creates a finetuning model (with classification head) and loads
+    This function creates a finetuning model (with classification or regression head) and loads
     pretrained encoder weights from a checkpoint, handling:
     - Key prefix stripping (backbone., encoder.)
     - Head weight removal if shape mismatch
@@ -213,7 +215,8 @@ def create_videomae_finetune_model(
     Args:
         backbone (str): Backbone architecture - 'vit-s', 'vit-b', 'vit-l', or 'vit-h'
         pretrained_path (str, optional): Path to pretrained checkpoint file (from pretraining)
-        num_classes (int): Number of classification classes (default: 101)
+        num_classes (int): Number of classification classes (default: 101). 
+                         Used when task_type='classification'
         num_frames (int): Number of frames (default: 16)
         tubelet_size (int): Tubelet size for patch embedding (default: 2)
         input_size (int): Input image size (default: 224)
@@ -228,13 +231,24 @@ def create_videomae_finetune_model(
         mcm_ratio (float): Motion-centric masking ratio (default: 0.4)
         model_key (str): Keys to try in checkpoint dict, separated by '|' (default: 'model|module')
         model_prefix (str): Prefix to add when loading state dict (default: '')
+        task_type (str): Task type - 'classification' or 'regression' (default: 'classification')
+        output_dim (int): Output dimension for regression (default: 1). 
+                         Used when task_type='regression'
     
     Returns:
         torch.nn.Module: VideoMAE finetuning model instance
     
     Raises:
         ValueError: If backbone is not one of 'vit-s', 'vit-b', 'vit-l', 'vit-h'
+        ValueError: If task_type is not 'classification' or 'regression'
     """
+    # Validate task_type
+    task_type = task_type.lower()
+    if task_type not in ['classification', 'regression']:
+        raise ValueError(
+            f"Unknown task_type: {task_type}. Must be one of 'classification' or 'regression'"
+        )
+    
     # Map backbone names to finetuning model registration names
     backbone_map = {
         'vit-s': 'vit_small_patch16_224',
@@ -250,12 +264,20 @@ def create_videomae_finetune_model(
     
     model_name = backbone_map[backbone.lower()]
     
+    # Determine output dimension based on task type
+    if task_type == 'regression':
+        head_output_dim = output_dim
+        print(f"Creating regression model with output_dim={output_dim}")
+    else:
+        head_output_dim = num_classes
+        print(f"Creating classification model with num_classes={num_classes}")
+    
     # Create finetuning model using timm's create_model
     # The model is registered in modeling_finetune.py
     model = create_model(
         model_name,
         pretrained=False,  # We handle pretrained loading separately
-        num_classes=num_classes,
+        num_classes=head_output_dim,
         all_frames=num_frames,
         tubelet_size=tubelet_size,
         fc_drop_rate=fc_drop_rate,

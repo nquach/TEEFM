@@ -2,13 +2,14 @@
 PyTorch Lightning Module for VideoMAE Finetuning
 
 This module provides a PyTorch Lightning wrapper for the VideoMAE finetuning model,
-enabling easy multi-GPU training, checkpointing, and logging for classification tasks.
+enabling easy multi-GPU training, checkpointing, and logging for classification and regression tasks.
 """
 
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 from torchmetrics.classification import MulticlassAccuracy
+from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError, R2Score
 import sys
 
 from modeling.model_factory import create_videomae_finetune_model
@@ -18,14 +19,15 @@ from mixup import Mixup
 
 class VideoMAEFinetuningLightningModule(pl.LightningModule):
     """
-    PyTorch Lightning module for VideoMAE finetuning (classification).
+    PyTorch Lightning module for VideoMAE finetuning (classification or regression).
     
     This module wraps the VideoMAE finetuning model and provides:
     - Training and validation/test step implementations
-    - Cross-entropy loss for classification
+    - Cross-entropy loss for classification or MSE/L1 loss for regression
     - Schedule-free optimizer configuration (AdamWScheduleFree or RAdamScheduleFree)
-    - Support for mixup/cutmix augmentation
-    - Accuracy metrics (top-1, top-5)
+    - Support for mixup/cutmix augmentation (classification only)
+    - Accuracy metrics (top-1, top-5) for classification
+    - Regression metrics (MSE, MAE, R²) for regression
     - Optional gradient norm tracking
     - Automatic logging of metrics
     - Model EMA (Exponential Moving Average) support
@@ -47,6 +49,14 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
         self.features_config = config.get('features', {})
         self.augmentation_config = config.get('augmentation', {})
         
+        # Determine task type (default to classification for backward compatibility)
+        self.task_type = self.model_config.get('task_type', 'classification').lower()
+        if self.task_type not in ['classification', 'regression']:
+            raise ValueError(f"task_type must be 'classification' or 'regression', got '{self.task_type}'")
+        
+        # Get output dimension for regression (default: 1 for single-value regression)
+        output_dim = self.model_config.get('output_dim', 1) if self.task_type == 'regression' else None
+        
         # Create model using factory function
         self.model = create_videomae_finetune_model(
             backbone=self.model_config['backbone'],
@@ -65,47 +75,72 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
             mcm=self.model_config.get('mcm', False),
             mcm_ratio=self.model_config.get('mcm_ratio', 0.4),
             model_key=self.model_config.get('model_key', 'model|module'),
-            model_prefix=self.model_config.get('model_prefix', '')
+            model_prefix=self.model_config.get('model_prefix', ''),
+            task_type=self.task_type,
+            output_dim=output_dim if output_dim is not None else 1
         )
         
-        # Loss function (Cross-entropy for classification)
-        label_smoothing = self.augmentation_config.get('label_smoothing', 0.0)
-        if label_smoothing > 0:
-            from timm.loss import LabelSmoothingCrossEntropy
-            self.criterion = LabelSmoothingCrossEntropy(smoothing=label_smoothing)
-        else:
-            self.criterion = nn.CrossEntropyLoss()
+        # Loss function (conditional on task type)
+        if self.task_type == 'classification':
+            label_smoothing = self.augmentation_config.get('label_smoothing', 0.0)
+            if label_smoothing > 0:
+                from timm.loss import LabelSmoothingCrossEntropy
+                self.criterion = LabelSmoothingCrossEntropy(smoothing=label_smoothing)
+            else:
+                self.criterion = nn.CrossEntropyLoss()
+        else:  # regression
+            regression_loss = self.model_config.get('regression_loss', 'mse').lower()
+            if regression_loss == 'l1':
+                self.criterion = nn.L1Loss()
+            else:  # default to MSE
+                self.criterion = nn.MSELoss()
         
-        # Accuracy metrics
-        num_classes = self.model_config.get('num_classes', 101)
-        self.train_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1)
-        self.train_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=5)
-        self.val_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1)
-        self.val_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=5)
-        self.test_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1)
-        self.test_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=5)
+        # Metrics (conditional on task type)
+        if self.task_type == 'classification':
+            num_classes = self.model_config.get('num_classes', 101)
+            self.train_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1)
+            self.train_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=5)
+            self.val_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1)
+            self.val_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=5)
+            self.test_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1)
+            self.test_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=5)
+        else:  # regression
+            self.train_mse = MeanSquaredError()
+            self.train_mae = MeanAbsoluteError()
+            self.train_r2 = R2Score()
+            self.val_mse = MeanSquaredError()
+            self.val_mae = MeanAbsoluteError()
+            self.val_r2 = R2Score()
+            self.test_mse = MeanSquaredError()
+            self.test_mae = MeanAbsoluteError()
+            self.test_r2 = R2Score()
         
-        # Mixup/Cutmix setup
-        mixup_alpha = self.augmentation_config.get('mixup', 0.0)
-        cutmix_alpha = self.augmentation_config.get('cutmix', 0.0)
-        cutmix_minmax = self.augmentation_config.get('cutmix_minmax', None)
-        mixup_prob = self.augmentation_config.get('mixup_prob', 1.0)
-        mixup_switch_prob = self.augmentation_config.get('mixup_switch_prob', 0.5)
-        mixup_mode = self.augmentation_config.get('mixup_mode', 'batch')
-        
+        # Mixup/Cutmix setup (only for classification)
         self.mixup_fn = None
-        if mixup_alpha > 0 or cutmix_alpha > 0 or cutmix_minmax is not None:
-            self.mixup_fn = Mixup(
-                mixup_alpha=mixup_alpha,
-                cutmix_alpha=cutmix_alpha,
-                cutmix_minmax=cutmix_minmax,
-                prob=mixup_prob,
-                switch_prob=mixup_switch_prob,
-                mode=mixup_mode,
-                label_smoothing=label_smoothing,
-                num_classes=num_classes
-            )
-            print("Mixup/Cutmix is activated!")
+        if self.task_type == 'classification':
+            mixup_alpha = self.augmentation_config.get('mixup', 0.0)
+            cutmix_alpha = self.augmentation_config.get('cutmix', 0.0)
+            cutmix_minmax = self.augmentation_config.get('cutmix_minmax', None)
+            mixup_prob = self.augmentation_config.get('mixup_prob', 1.0)
+            mixup_switch_prob = self.augmentation_config.get('mixup_switch_prob', 0.5)
+            mixup_mode = self.augmentation_config.get('mixup_mode', 'batch')
+            label_smoothing = self.augmentation_config.get('label_smoothing', 0.0)
+            num_classes = self.model_config.get('num_classes', 101)
+            
+            if mixup_alpha > 0 or cutmix_alpha > 0 or cutmix_minmax is not None:
+                self.mixup_fn = Mixup(
+                    mixup_alpha=mixup_alpha,
+                    cutmix_alpha=cutmix_alpha,
+                    cutmix_minmax=cutmix_minmax,
+                    prob=mixup_prob,
+                    switch_prob=mixup_switch_prob,
+                    mode=mixup_mode,
+                    label_smoothing=label_smoothing,
+                    num_classes=num_classes
+                )
+                print("Mixup/Cutmix is activated!")
+        else:
+            print("Mixup/Cutmix disabled for regression tasks")
         
         # Whether to track gradient norm
         self.track_grad_norm = self.features_config.get('track_grad_norm', False)
@@ -128,7 +163,7 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
             x (torch.Tensor): Input video tensor [B, C, T, H, W]
         
         Returns:
-            torch.Tensor: Classification logits [B, num_classes]
+            torch.Tensor: Classification logits [B, num_classes] or regression outputs [B, output_dim]
         """
         return self.model(x)
     
@@ -164,7 +199,7 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
         """
         videos, targets = batch
         
-        # Apply mixup/cutmix if enabled
+        # Apply mixup/cutmix if enabled (classification only)
         if self.mixup_fn is not None:
             videos, targets = self.mixup_fn(videos, targets)
         
@@ -172,25 +207,43 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
         outputs = self.model(videos)
         
         # Compute loss
-        if self.mixup_fn is not None:
-            # For mixup, targets might be soft labels
-            loss = self.criterion(outputs, targets)
-        else:
-            loss = self.criterion(outputs, targets)
+        if self.task_type == 'regression':
+            # For regression, ensure outputs and targets have compatible shapes
+            if outputs.dim() > 1 and outputs.size(1) == 1:
+                outputs = outputs.squeeze(1)
+            loss = self.criterion(outputs, targets.float())
+        else:  # classification
+            if self.mixup_fn is not None:
+                # For mixup, targets might be soft labels
+                loss = self.criterion(outputs, targets)
+            else:
+                loss = self.criterion(outputs, targets.long())
         
         if not torch.isfinite(loss).all():
             print("Loss is infinite or NaN, stopping training")
             sys.exit(1)
         
-        # Compute accuracy (only if not using mixup, as mixup uses soft labels)
-        if self.mixup_fn is None:
-            # Update accuracy metrics
-            self.train_acc1(outputs, targets.long())
-            self.train_acc5(outputs, targets.long())
+        # Compute and log metrics based on task type
+        if self.task_type == 'classification':
+            # Compute accuracy (only if not using mixup, as mixup uses soft labels)
+            if self.mixup_fn is None:
+                # Update accuracy metrics
+                self.train_acc1(outputs, targets.long())
+                self.train_acc5(outputs, targets.long())
+                
+                # Log metrics
+                self.log('train_acc1', self.train_acc1, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                self.log('train_acc5', self.train_acc5, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        else:  # regression
+            # Update regression metrics
+            self.train_mse(outputs, targets.float())
+            self.train_mae(outputs, targets.float())
+            self.train_r2(outputs, targets.float())
             
             # Log metrics
-            self.log('train_acc1', self.train_acc1, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-            self.log('train_acc5', self.train_acc5, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('train_mse', self.train_mse, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('train_mae', self.train_mae, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('train_r2', self.train_r2, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         
         # Log training loss
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
@@ -217,16 +270,35 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
         outputs = self.model(videos)
         
         # Compute loss
-        loss = self.criterion(outputs, targets)
+        if self.task_type == 'regression':
+            # For regression, ensure outputs and targets have compatible shapes
+            if outputs.dim() > 1 and outputs.size(1) == 1:
+                outputs = outputs.squeeze(1)
+            loss = self.criterion(outputs, targets.float())
+        else:  # classification
+            loss = self.criterion(outputs, targets.long())
         
-        # Update accuracy metrics
-        self.val_acc1(outputs, targets.long())
-        self.val_acc5(outputs, targets.long())
-        
-        # Log metrics
-        self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-        self.log('val_acc1', self.val_acc1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-        self.log('val_acc5', self.val_acc5, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        # Update and log metrics based on task type
+        if self.task_type == 'classification':
+            # Update accuracy metrics
+            self.val_acc1(outputs, targets.long())
+            self.val_acc5(outputs, targets.long())
+            
+            # Log metrics
+            self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('val_acc1', self.val_acc1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('val_acc5', self.val_acc5, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        else:  # regression
+            # Update regression metrics
+            self.val_mse(outputs, targets.float())
+            self.val_mae(outputs, targets.float())
+            self.val_r2(outputs, targets.float())
+            
+            # Log metrics
+            self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('val_mse', self.val_mse, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('val_mae', self.val_mae, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('val_r2', self.val_r2, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         
         return loss
     
@@ -245,16 +317,35 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
         outputs = model_to_use(videos)
         
         # Compute loss
-        loss = self.criterion(outputs, targets)
+        if self.task_type == 'regression':
+            # For regression, ensure outputs and targets have compatible shapes
+            if outputs.dim() > 1 and outputs.size(1) == 1:
+                outputs = outputs.squeeze(1)
+            loss = self.criterion(outputs, targets.float())
+        else:  # classification
+            loss = self.criterion(outputs, targets.long())
         
-        # Update accuracy metrics
-        self.test_acc1(outputs, targets.long())
-        self.test_acc5(outputs, targets.long())
-        
-        # Log metrics
-        self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-        self.log('test_acc1', self.test_acc1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-        self.log('test_acc5', self.test_acc5, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        # Update and log metrics based on task type
+        if self.task_type == 'classification':
+            # Update accuracy metrics
+            self.test_acc1(outputs, targets.long())
+            self.test_acc5(outputs, targets.long())
+            
+            # Log metrics
+            self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('test_acc1', self.test_acc1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('test_acc5', self.test_acc5, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+        else:  # regression
+            # Update regression metrics
+            self.test_mse(outputs, targets.float())
+            self.test_mae(outputs, targets.float())
+            self.test_r2(outputs, targets.float())
+            
+            # Log metrics
+            self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('test_mse', self.test_mse, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('test_mae', self.test_mae, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('test_r2', self.test_r2, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         
         return loss
     
