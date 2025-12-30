@@ -1,0 +1,77 @@
+# Example configuration file for VideoMAE reconstruction visualization
+# This configuration file can be used with visualize_reconstruction.py
+# It reuses the same structure as pretraining configs
+
+# Dataset configuration (required)
+data:
+  # Path to optimized dataset directory (created with litdata.optimize())
+  train_optimized_dir: "path/to/optimized/dataset"
+  
+  # Cache directory for litdata
+  cache_dir: "./output/cache"
+  
+  # Subset ratio (optional, null for full dataset)
+  subset_ratio: null
+  
+  # Normalization values (should match training config)
+  normalize_mean: [0.117, 0.114, 0.113]
+  normalize_std: [0.208, 0.204, 0.203]
+  
+  # Maximum cache size
+  max_cache_size: '50GB'
+  
+  # Cloud storage type (if using S3/remote datasets)
+  cloud_type: 's3_public'  # or null for local datasets
+
+# Model configuration (required - must match pretraining config)
+model:
+  # Backbone architecture: "vit-s", "vit-b", "vit-l", or "vit-h"
+  backbone: "vit-s"
+  
+  # Decoder depth (must match pretraining)
+  decoder_depth: 4
+  
+  # Masking strategy: "random", "tube", or "motion-centric"
+  mask_type: "motion-centric"
+  
+  # Masking ratio
+  mask_ratio: 0.9
+  
+  # Motion-centric masking ratio (if using motion-centric masking)
+  motion_centric_masking_ratio: 0.7
+  
+  # Drop path rate
+  drop_path: 0.0
+  
+  # Whether target patches were normalized during training
+  normalize_target: true
+  
+  # Input image size
+  input_size: 224
+  
+  # Patch size
+  patch_size: 16
+  
+  # Tubelet size
+  tubelet_size: 2
+
+# Training configuration (required for dataset loading)
+training:
+  # Number of frames (must match pretraining)
+  num_frames: 16
+  
+  # Temporal stride
+  temporal_stride: 1
+
+# Features configuration (optional)
+features:
+  # Use gradient checkpointing
+  use_checkpoint: false
+
+# Visualization-specific parameters (optional, can be overridden via command line)
+# These are not used by the script but documented here for reference:
+# --num_samples: Number of random videos to visualize (default: 5)
+# --frames_to_show: Number of frames per video to show (default: 8)
+# --grid_cols: Number of columns in grid (default: 3)
+# --seed: Random seed for reproducible sampling (optional)
+
