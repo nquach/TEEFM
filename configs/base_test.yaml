@@ -94,9 +94,14 @@ checkpoint:
   prefix: "videomae_VitS_radam_basetest_"
   # Number of best checkpoints to keep
   save_top_k: 3
+  # Whether to save the last checkpoint in addition to top_k (default: false to save disk space)
+  save_last: false
+  # Strict top K mode: if true, ensures ONLY top_k checkpoints exist (disables save_last)
+  # When false, save_last and periodic saves (save_ckpt_freq) can create additional checkpoints
+  strict_top_k: false
   # Metric to monitor for saving best checkpoints
   monitor: "train_loss_epoch"
-  # Save checkpoints every N epochs (in addition to best checkpoints)
+  # Save checkpoints every N epochs (in addition to best checkpoints, still subject to top_k limit)
   save_ckpt_freq: null
 
 # Optional features

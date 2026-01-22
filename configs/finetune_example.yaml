@@ -183,7 +183,15 @@ checkpoint:
   # Save top K checkpoints
   save_top_k: 1
   
+  # Whether to save the last checkpoint in addition to top_k (default: false to save disk space)
+  save_last: false
+  
+  # Strict top K mode: if true, ensures ONLY top_k checkpoints exist (disables save_last)
+  # When false, save_last and periodic saves (save_ckpt_freq) can create additional checkpoints
+  strict_top_k: false
+  
   # Save checkpoint every N epochs (null to save only best)
+  # Periodic saves are still subject to top_k limit when strict_top_k=false
   save_ckpt_freq: null
 
 logging:

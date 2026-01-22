@@ -96,18 +96,43 @@ def main():
         checkpoint_dir = checkpoint_config['dir']
         os.makedirs(checkpoint_dir, exist_ok=True)
         checkpoint_prefix = checkpoint_config['prefix']
+        
+        # Get checkpoint management options
+        save_top_k = checkpoint_config.get('save_top_k', 1)
+        strict_top_k = checkpoint_config.get('strict_top_k', False)
+        
+        # Determine save_last behavior
+        if strict_top_k:
+            # Strict mode: only keep top_k checkpoints, no last checkpoint
+            save_last = False
+            # In strict mode, every_n_epochs should not create extra checkpoints
+            # PyTorch Lightning's ModelCheckpoint already respects save_top_k for every_n_epochs
+            every_n_epochs = checkpoint_config.get('save_ckpt_freq', None)
+        else:
+            # Normal mode: configurable save_last (default False to save disk space)
+            save_last = checkpoint_config.get('save_last', False)
+            every_n_epochs = checkpoint_config.get('save_ckpt_freq', None)
+        
         checkpoint_callback = ModelCheckpoint(
             monitor=checkpoint_config.get('monitor', 'train_loss_epoch'),
             dirpath=checkpoint_dir,
             filename = checkpoint_prefix + "-{epoch:02d}-{train_loss_epoch:.4f}",
             mode='min',
-            save_top_k=checkpoint_config.get('save_top_k', 1),
+            save_top_k=save_top_k,
             verbose=True,
             auto_insert_metric_name=False,
-            every_n_epochs=checkpoint_config.get('save_ckpt_freq', None),
+            every_n_epochs=every_n_epochs,
             save_on_train_epoch_end=True,
-            save_last=True
+            save_last=save_last
         )
+        
+        # Print checkpoint configuration
+        print(f"Checkpoint configuration:")
+        print(f"  Save top K: {save_top_k}")
+        print(f"  Save last: {save_last}")
+        print(f"  Strict top K mode: {strict_top_k}")
+        if every_n_epochs:
+            print(f"  Periodic saves every {every_n_epochs} epochs")
     
     # Setup logging
     logging_config = config.get('logging', {})
