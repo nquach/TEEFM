@@ -1,0 +1,120 @@
+# EVEREST VideoMAE Training Configuration
+# Configuration file for training VideoMAE with custom dataset using PyTorch Lightning
+
+# Dataset configuration
+data:
+  train_optimized_dir: 's3://tee-2023-2024/opt_mp4-2014-2023'
+  # Path to cache directory for optimized datasets
+  cache_dir: "./output/cache"
+  # Path to CSV file containing training video paths (one path per line)
+  subset_ratio: null
+  # Custom normalization values for the dataset
+  # These replace the default ImageNet normalization
+  normalize_mean: [0.117, 0.114, 0.113]
+  normalize_std: [0.208, 0.204, 0.203]
+  max_cache_size: '100GB'
+  cloud_type: 's3_public'
+
+# Model configuration
+model:
+  # Backbone architecture: "vit-s" (small), "vit-b" (base), "vit-l" (large), or "vit-h" (huge)
+  backbone: "vit-b"
+  # Path to pretrained checkpoint file (null for random initialization)
+  pretrained_path: null
+  # Decoder depth for the VideoMAE model
+  decoder_depth: 4
+  # Masking strategy: "random", "tube", or "motion-centric"
+  mask_type: "motion-centric"
+  # Masking ratio (fraction of patches to mask)
+  mask_ratio: 0.9
+  # Motion-centric masking ratio (only used if mask_type is "motion-centric")
+  motion_centric_masking_ratio: 0.7
+  # Drop path rate for regularization
+  drop_path: 0.0
+  # Whether to normalize target patches
+  normalize_target: true
+  # Input image size (videos should already be this size)
+  input_size: 224
+  # Patch size for the Vision Transformer
+  patch_size: 16
+  #RandomResizeCrop crop area ratio range
+  crop_scale: [0.75,1.0]
+  #RandomResizeCrop crop aspect ratio range
+  crop_aspect_ratio: [0.8,1.2]
+
+# Training configuration
+training:
+  # Batch size per GPU
+  batch_size: 128
+  # Number of data loading workers
+  num_workers: 10
+  # Maximum number of training epochs
+  max_epochs: 800
+  # Whether to pin memory in DataLoader (faster GPU transfer)
+  pin_memory: true
+  # Random seed for reproducibility
+  seed: 0
+  # Number of frames to sample from each video (before downsampling)
+  num_frames: 16
+  # Temporal stride for downsampling (2 means every other frame)
+  temporal_stride: 1
+  # Number of consecutive frames to sample before downsampling
+  frames_to_sample: 16
+  # Gradient clip value
+  gradient_clip_val: 0
+  # Number of gradient accumulation steps
+  accumulate_grad_batches: 1  
+  # Strategy to use for distributed training
+  strategy: "deepspeed_stage_2"
+  # Number of nodes to use for distributed training
+
+# Optimizer configuration (Schedule-Free Optimizers)
+optimizer:
+  # Optimizer type: "adamw" (AdamWScheduleFree) or "radam" (RAdamScheduleFree)
+  type: "radam"
+  # Learning rate
+  lr: 1e-3
+  # Weight decay
+  weight_decay: 0.05
+  # Beta parameters for Adam-based optimizers
+  betas: [0.9, 0.95]
+  # Epsilon for numerical stability
+  eps: 1e-8
+  # Warmup steps for AdamWScheduleFree (only applies when type is "adamw")
+  # Set to 0 to disable warmup. Warmup helps stabilize training in initial phases.
+  warmup_steps: 0
+
+# Checkpoint configuration
+checkpoint:
+  # Whether to save model checkpoints (set to false to disable checkpointing)
+  enable: true
+  # Directory to save checkpoints
+  dir: "./output/checkpoints"
+  # Prefix for checkpoint filenames
+  prefix: "videomae_VitB_radam_LR1E3_BS64x16_"
+  # Number of best checkpoints to keep
+  save_top_k: 3
+  # Whether to save the last checkpoint in addition to top_k (default: false to save disk space)
+  save_last: true
+  # Strict top K mode: if true, ensures ONLY top_k checkpoints exist (disables save_last)
+  # When false, save_last and periodic saves (save_ckpt_freq) can create additional checkpoints
+  strict_top_k: false
+  # Metric to monitor for saving best checkpoints
+  monitor: "train_loss_epoch"
+  # Save checkpoints every N epochs (in addition to best checkpoints, still subject to top_k limit)
+  save_ckpt_freq: null
+
+# Optional features
+features:
+  # Whether to track and log L2 norm of total loss gradient (default: false)
+  track_grad_norm: false
+  # Whether to use gradient checkpointing to save memory
+  use_checkpoint: false
+
+# Logging configuration
+logging:
+  # Directory for TensorBoard logs
+  log_dir: "./output/logs"
+  # Logging frequency (log every N steps)
+  log_freq: 10
+
