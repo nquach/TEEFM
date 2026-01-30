@@ -9,6 +9,7 @@ import os
 import argparse
 import yaml
 import torch
+import torch.nn.functional as F
 import random
 import numpy as np
 from einops import rearrange
@@ -121,6 +122,81 @@ def load_dataset(config):
     
     print(f"Loaded dataset with {len(dataset)} videos")
     return dataset
+
+
+def compute_reconstruction_loss(model, video, mask, config, device):
+    """
+    Compute the same MSE loss as training over one video (sanity check for reconstruction).
+    Mirrors lightning_module.py training_step: build targets from unnormalized patches,
+    forward pass, then MSE(outputs, labels).
+    """
+    video = video.to(device).unsqueeze(0)  # [1, C, T, H, W]
+    if mask is not None and not isinstance(mask, tuple):
+        mask = mask.to(device)
+        if mask.dim() > 1:
+            mask = mask.flatten(0).unsqueeze(0)  # [1, num_patches] for non-MCM
+
+    data_config = config.get('data', {})
+    model_config = config.get('model', {})
+    mean = torch.tensor(
+        data_config.get('normalize_mean', [0.117, 0.114, 0.113]),
+        device=device, dtype=video.dtype
+    )
+    std = torch.tensor(
+        data_config.get('normalize_std', [0.208, 0.204, 0.203]),
+        device=device, dtype=video.dtype
+    )
+    patch_size = model_config.get('patch_size', 16)
+    tubelet_size = model_config.get('tubelet_size', 2)
+    normalize_target = model_config.get('normalize_target', True)
+    mask_type = model_config.get('mask_type', 'motion-centric')
+
+    # Unnormalize to get pixel values (same as training)
+    unnorm_videos = video * std[None, :, None, None, None] + mean[None, :, None, None, None]
+
+    # Build videos_patch exactly as in lightning_module.py
+    if normalize_target:
+        videos_squeeze = rearrange(
+            unnorm_videos,
+            'b c (t p0) (h p1) (w p2) -> b (t h w) (p0 p1 p2) c',
+            p0=tubelet_size,
+            p1=patch_size,
+            p2=patch_size
+        )
+        videos_norm = (
+            videos_squeeze - videos_squeeze.mean(dim=-2, keepdim=True)
+        ) / (videos_squeeze.var(dim=-2, unbiased=True, keepdim=True).sqrt() + 1e-6)
+        videos_patch = rearrange(videos_norm, 'b n p c -> b n (p c)')
+    else:
+        videos_patch = rearrange(
+            unnorm_videos,
+            'b c (t p0) (h p1) (w p2) -> b (t h w) (p0 p1 p2 c)',
+            p0=tubelet_size,
+            p1=patch_size,
+            p2=patch_size
+        )
+
+    B, _, C = videos_patch.shape
+    if mask_type != 'motion-centric' and mask is not None:
+        mask = mask.to(torch.bool)
+        if mask.dim() == 1:
+            mask = mask.unsqueeze(0)
+        else:
+            mask = mask.flatten(1)
+
+    with torch.no_grad():
+        outputs, masks = model(video, mask)
+
+    if mask_type == 'motion-centric':
+        _, mc_target_mask = masks
+        labels = videos_patch[~mc_target_mask].reshape(B, -1, C)
+    else:
+        if mask is None:
+            return float('nan')
+        labels = videos_patch[mask].reshape(B, -1, C)
+
+    loss = F.mse_loss(outputs, labels)
+    return loss.item()
 
 
 def reconstruct_video(model, video, mask, config, device):
@@ -254,6 +330,11 @@ def main():
         default='cuda' if torch.cuda.is_available() else 'cpu',
         help='Device to use (cuda or cpu)'
     )
+    parser.add_argument(
+        '--compute-loss',
+        action='store_true',
+        help='Compute training-style MSE over each visualized sample as a sanity check'
+    )
     
     args = parser.parse_args()
     
@@ -290,6 +371,7 @@ def main():
     
     print(f"Sampling {num_samples} videos from dataset...")
     
+    loss_values = []  # for aggregate stats when --compute-loss
     # Process each sampled video
     for i, video_idx in enumerate(sample_indices):
         print(f"\nProcessing video {i+1}/{num_samples} (index {video_idx})...")
@@ -297,6 +379,11 @@ def main():
         try:
             # Load video and mask
             video, mask = dataset[video_idx]
+            
+            if args.compute_loss:
+                loss_val = compute_reconstruction_loss(model, video, mask, config, device)
+                loss_values.append(loss_val)
+                print(f"  Video {video_idx}: reconstruction MSE = {loss_val:.6f}")
             
             # Process video
             original_vis, masked_vis, reconstructed_vis = process_video_for_visualization(
@@ -332,6 +419,14 @@ def main():
             import traceback
             traceback.print_exc()
             continue
+    
+    if args.compute_loss and loss_values:
+        mean_mse = float(np.mean(loss_values))
+        n = len(loss_values)
+        print(f"\nMean reconstruction MSE over {n} sample(s): {mean_mse:.6f}")
+        if n > 1:
+            std_mse = float(np.std(loss_values))
+            print(f"Std reconstruction MSE: {std_mse:.6f}")
     
     print(f"\nVisualization complete! Saved {num_samples} visualizations to {args.output_dir}")
 
