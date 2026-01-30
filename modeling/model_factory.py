@@ -106,13 +106,17 @@ def create_videomae_model(
             else:
                 state_dict = checkpoint
             
-            # Strip "module." prefix from keys (DDP/DeepSpeed save wrapped model state_dict)
+            # Strip DDP/DeepSpeed prefixes from keys (e.g. module., module.module., engine.module.)
             new_state_dict = OrderedDict()
             for k, v in state_dict.items():
-                if k.startswith('module.'):
-                    new_state_dict[k[7:]] = v
-                else:
-                    new_state_dict[k] = v
+                key = k
+                while key.startswith('module.'):
+                    key = key[7:]
+                if key.startswith('engine.module.'):
+                    key = key[14:]
+                elif key.startswith('engine.'):
+                    key = key[7:]
+                new_state_dict[key] = v
             state_dict = new_state_dict
             
             # Load state dict with strict=False for flexibility
@@ -120,13 +124,10 @@ def create_videomae_model(
             
             if missing_keys:
                 print(f"Warning: Missing keys when loading pretrained weights: {len(missing_keys)} keys")
-                if len(missing_keys) <= 10:  # Only print if not too many
-                    print(f"Missing keys: {missing_keys}")
-            
+                print(f"  Sample missing: {missing_keys[:5]}")
             if unexpected_keys:
                 print(f"Warning: Unexpected keys when loading pretrained weights: {len(unexpected_keys)} keys")
-                if len(unexpected_keys) <= 10:  # Only print if not too many
-                    print(f"Unexpected keys: {unexpected_keys}")
+                print(f"  Sample unexpected: {unexpected_keys[:5]}")
             
             print("Successfully loaded pretrained weights")
         except Exception as e:
