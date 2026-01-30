@@ -78,13 +78,18 @@ def patches_to_video(
     if bool_masked_pos is not None and reconstructed_patches.numel() > 0:
         # reconstructed_patches: [B, num_masked, patch_dim]
         # We need to place them at the masked positions
-        
-        # For each batch, place reconstructed patches at masked positions
+        # When normalize_target=True, decoder outputs per-patch normalized values; scale to [0,1] for display
         for b in range(B):
             masked_indices = bool_masked_pos[b]
             num_masked = masked_indices.sum().item()
             if num_masked > 0:
-                full_patches[b, masked_indices] = reconstructed_patches[b, :num_masked]
+                patches = reconstructed_patches[b, :num_masked].float()
+                if normalize_target:
+                    # Per-patch min-max to [0,1] for display (decoder predicts normalized space)
+                    p_min = patches.min(dim=1, keepdim=True)[0]
+                    p_max = patches.max(dim=1, keepdim=True)[0]
+                    patches = (patches - p_min) / (p_max - p_min + 1e-6)
+                full_patches[b, masked_indices] = patches
     
     # Reshape patches back to video format
     # full_patches: [B, num_patches, patch_dim]

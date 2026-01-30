@@ -193,10 +193,11 @@ def process_video_for_visualization(
         tubelet_size
     )
     
-    # Denormalize all videos for visualization
+    # Denormalize input-normalized videos for visualization
     original_vis = denormalize_video(original_video, mean, std)
     masked_vis = denormalize_video(masked_video, mean, std)
-    reconstructed_vis = denormalize_video(reconstructed_video, mean, std)
+    # Reconstructed video is already in [0,1] (patches_to_video scales when normalize_target=True)
+    reconstructed_vis = reconstructed_video.clamp(0.0, 1.0)
     
     return original_vis, masked_vis, reconstructed_vis
 
