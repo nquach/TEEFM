@@ -275,13 +275,12 @@ def process_video_for_visualization(
     # Reconstructed video is already in [0,1] (patches_to_video scales when normalize_target=True)
     reconstructed_vis = reconstructed_video.clamp(0.0, 1.0)
     
-    # Option B: shared global min-max stretch so all three columns have consistent brightness/contrast
-    global_min = min(original_vis.min().item(), masked_vis.min().item(), reconstructed_vis.min().item())
-    global_max = max(original_vis.max().item(), masked_vis.max().item(), reconstructed_vis.max().item())
-    scale = global_max - global_min + 1e-6
-    original_vis = ((original_vis - global_min) / scale).clamp(0.0, 1.0)
-    masked_vis = ((masked_vis - global_min) / scale).clamp(0.0, 1.0)
-    reconstructed_vis = ((reconstructed_vis - global_min) / scale).clamp(0.0, 1.0)
+    # Option A: per-column min-max stretch so columns 1 and 2 use full [0,1] range (match column 3)
+    def stretch_to_01(v):
+        v_min, v_max = v.min().item(), v.max().item()
+        return ((v - v_min) / (v_max - v_min + 1e-6)).clamp(0.0, 1.0)
+    original_vis = stretch_to_01(original_vis)
+    masked_vis = stretch_to_01(masked_vis)
     
     return original_vis, masked_vis, reconstructed_vis
 
