@@ -134,7 +134,7 @@ def reconstruct_video(model, video, mask, config, device):
     with torch.no_grad():
         outputs, masks = model(video.unsqueeze(0), mask)
     
-    return outputs, masks, video
+    return outputs, masks, video.unsqueeze(0)
 
 
 def process_video_for_visualization(
