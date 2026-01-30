@@ -101,10 +101,19 @@ def create_videomae_model(
                 elif 'state_dict' in checkpoint:
                     state_dict = checkpoint['state_dict']
                 # Otherwise assume the dict itself is the state_dict
-                else:
-                    state_dict = checkpoint
             else:
                 state_dict = checkpoint
+            else:
+                state_dict = checkpoint
+            
+            # Strip "module." prefix from keys (DDP/DeepSpeed save wrapped model state_dict)
+            new_state_dict = OrderedDict()
+            for k, v in state_dict.items():
+                if k.startswith('module.'):
+                    new_state_dict[k[7:]] = v
+                else:
+                    new_state_dict[k] = v
+            state_dict = new_state_dict
             
             # Load state dict with strict=False for flexibility
             missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
