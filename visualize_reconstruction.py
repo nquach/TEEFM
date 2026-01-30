@@ -131,7 +131,7 @@ def compute_reconstruction_loss(model, video, mask, config, device):
     forward pass, then MSE(outputs, labels).
     """
     video = video.to(device).unsqueeze(0)  # [1, C, T, H, W]
-    if mask is not None and not isinstance(mask, tuple):
+    if mask is not None and not isinstance(mask, (tuple, int)) and isinstance(mask, torch.Tensor):
         mask = mask.to(device)
         if mask.dim() > 1:
             mask = mask.flatten(0).unsqueeze(0)  # [1, num_patches] for non-MCM
@@ -177,7 +177,7 @@ def compute_reconstruction_loss(model, video, mask, config, device):
         )
 
     B, _, C = videos_patch.shape
-    if mask_type != 'motion-centric' and mask is not None:
+    if mask_type != 'motion-centric' and mask is not None and isinstance(mask, torch.Tensor):
         mask = mask.to(torch.bool)
         if mask.dim() == 1:
             mask = mask.unsqueeze(0)
@@ -191,7 +191,7 @@ def compute_reconstruction_loss(model, video, mask, config, device):
         _, mc_target_mask = masks
         labels = videos_patch[~mc_target_mask].reshape(B, -1, C)
     else:
-        if mask is None:
+        if mask is None or not isinstance(mask, torch.Tensor):
             return float('nan')
         labels = videos_patch[mask].reshape(B, -1, C)
 
