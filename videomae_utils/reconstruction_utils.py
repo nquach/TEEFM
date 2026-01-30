@@ -324,4 +324,3 @@ def save_visualization_grid(grid_image, output_path, video_index, frame_indices=
     print(f"Saved visualization to {filepath}")
     
     return filepath
-

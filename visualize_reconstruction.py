@@ -16,7 +16,7 @@ from einops import rearrange
 from modeling.model_factory import create_videomae_model
 from datasets.optimized_video_dataset import OptimizedVideoDataset
 from transforms.custom_transforms import DataAugmentationForVideoMAE
-from utils.reconstruction_utils import (
+from videomae_utils.reconstruction_utils import (
     patches_to_video,
     create_masked_video,
     denormalize_video,

@@ -184,4 +184,3 @@ def get_checkpoint_stats(checkpoint_dir: str, prefix: str) -> dict:
         'total_size_gb': total_size / (1024 * 1024 * 1024),
         'files': [os.path.basename(f[0]) for f in checkpoint_files]
     }
-
