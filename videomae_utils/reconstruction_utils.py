@@ -171,20 +171,21 @@ def create_masked_video(video, mask, patch_size, tubelet_size):
         masked_indices = bool_masked_pos[b]
         patches[b, masked_indices] = gray_patches[b, :masked_indices.sum()]
     
-    # Reshape back to video
+    # Reshape back to video (8D for rearrange: split spatial patches into h_p, w_p)
     num_frames_patches = T // tubelet_size
-    num_patches_per_frame = (H // patch_size) * (W // patch_size)
+    h_p = H // patch_size
+    w_p = W // patch_size
     
     patches_3d = patches.reshape(
-        B, num_frames_patches, num_patches_per_frame, tubelet_size, patch_size, patch_size, 3
+        B, num_frames_patches, h_p, w_p, tubelet_size, patch_size, patch_size, 3
     )
     
     masked_video = rearrange(
         patches_3d,
         'b t_f h_p w_p t_t h_patch w_patch c -> b c (t_f t_t) (h_p h_patch) (w_p w_patch)',
         t_f=num_frames_patches,
-        h_p=H // patch_size,
-        w_p=W // patch_size,
+        h_p=h_p,
+        w_p=w_p,
         t_t=tubelet_size,
         h_patch=patch_size,
         w_patch=patch_size
