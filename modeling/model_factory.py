@@ -114,6 +114,8 @@ def create_videomae_model(
                     key = key[7:]
                 if key.startswith('engine.module.'):
                     key = key[14:]
+                elif key.startswith('model.'):
+                    key = key[6:]
                 elif key.startswith('engine.'):
                     key = key[7:]
                 new_state_dict[key] = v
