@@ -46,9 +46,10 @@ def patches_to_video(
     
     # Handle MCM mask format (tuple of masks)
     if isinstance(mask, tuple):
-        # For MCM: mask[0] is encoder mask, mask[1] is target mask
+        # For MCM: mask[0] is encoder mask, mask[1] is target mask.
+        # Decoder predicts only positions where mask[1] is False (0); use ~mask[1] for placement.
         target_mask = mask[1]  # [B, num_patches]
-        bool_masked_pos = target_mask.to(torch.bool)
+        bool_masked_pos = ~target_mask.to(torch.bool)
     else:
         bool_masked_pos = mask.to(torch.bool) if mask is not None else None
     
