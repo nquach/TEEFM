@@ -101,8 +101,8 @@ def create_videomae_model(
                 elif 'state_dict' in checkpoint:
                     state_dict = checkpoint['state_dict']
                 # Otherwise assume the dict itself is the state_dict
-            else:
-                state_dict = checkpoint
+                else:
+                    state_dict = checkpoint
             else:
                 state_dict = checkpoint
             
