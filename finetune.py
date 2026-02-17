@@ -12,7 +12,7 @@ This script handles:
 import os
 import yaml
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 import torch
 
@@ -91,27 +91,21 @@ def main():
     checkpoint_config = config['checkpoint']
     checkpoint_enabled = checkpoint_config.get('enable', True)
     
-    # Determine task type for checkpoint configuration
+    # Determine task type for checkpoint and early stopping configuration
     task_type = config['model'].get('task_type', 'classification').lower()
+    if task_type == 'regression':
+        default_monitor = 'val_mse'
+        checkpoint_mode = 'min'
+    else:  # classification
+        default_monitor = 'val_acc1'
+        checkpoint_mode = 'max'
+    monitor_metric = checkpoint_config.get('monitor', default_monitor)
     
     checkpoint_callback = None
     if checkpoint_enabled:
         checkpoint_dir = checkpoint_config['dir']
         os.makedirs(checkpoint_dir, exist_ok=True)
         checkpoint_prefix = checkpoint_config['prefix']
-        
-        # Configure checkpoint monitoring based on task type
-        if task_type == 'regression':
-            # For regression: minimize MSE (lower is better)
-            default_monitor = 'val_mse'
-            checkpoint_mode = 'min'
-        else:  # classification
-            # For classification: maximize accuracy (higher is better)
-            default_monitor = 'val_acc1'
-            checkpoint_mode = 'max'
-        
-        # Use configured monitor or default based on task type
-        monitor_metric = checkpoint_config.get('monitor', default_monitor)
         
         # Get checkpoint management options
         save_top_k = checkpoint_config.get('save_top_k', 1)
@@ -166,6 +160,28 @@ def main():
     callbacks_list = []
     if checkpoint_callback is not None:
         callbacks_list.append(checkpoint_callback)
+    
+    # Early stopping: stop if monitored validation metric does not improve for N epochs
+    early_config = config.get('early_stopping', {})
+    early_enabled = early_config.get('enable', False)
+    if early_enabled:
+        patience = early_config.get('patience')
+        if patience is None:
+            raise ValueError(
+                "early_stopping.enable is true but early_stopping.patience is not set. "
+                "Set early_stopping.patience to the number of epochs without improvement before stopping."
+            )
+        early_monitor = early_config.get('monitor', monitor_metric)
+        early_mode = early_config.get('mode', checkpoint_mode)
+        callbacks_list.append(
+            EarlyStopping(
+                monitor=early_monitor,
+                mode=early_mode,
+                patience=patience,
+                verbose=True
+            )
+        )
+        print(f"Early stopping: patience={patience}, monitor={early_monitor}")
     
     # Create trainer
     trainer = pl.Trainer(

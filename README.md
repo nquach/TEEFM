@@ -363,14 +363,15 @@ See `configs/visualize_example.yaml` for a complete example.
 Configuration files use YAML format with the following main sections:
 
 ```yaml
-data:          # Dataset configuration
-model:         # Model architecture and parameters
-training:      # Training hyperparameters
-optimizer:     # Optimizer configuration
-augmentation:  # Data augmentation (finetuning)
-features:      # Advanced features
-checkpoint:    # Checkpoint management
-logging:       # Logging configuration
+data:            # Dataset configuration
+model:           # Model architecture and parameters
+training:        # Training hyperparameters
+optimizer:       # Optimizer configuration
+augmentation:    # Data augmentation (finetuning)
+features:        # Advanced features
+early_stopping:  # Stop if validation metric does not improve (finetuning)
+checkpoint:      # Checkpoint management
+logging:         # Logging configuration
 ```
 
 ### Data Configuration
@@ -493,6 +494,22 @@ checkpoint:
 - **`save_top_k`**: Keeps the top K checkpoints based on monitored metric
 - **`save_last`**: Saves the last checkpoint in addition to top_k (uses extra disk space)
 - **`strict_top_k`**: When `true`, ensures exactly `save_top_k` checkpoints exist (disables `save_last`)
+
+### Early Stopping (Finetuning)
+
+Stop training if the monitored validation metric does not improve for N consecutive epochs. Requires a validation set.
+
+```yaml
+early_stopping:
+  enable: false
+  patience: 10  # Stop if no improvement for this many epochs (required when enable is true)
+  # monitor: "val_mse"  # Optional; defaults to same as checkpoint (e.g. val_mse / val_acc1)
+  # mode: "min"         # Optional; defaults to same as checkpoint (min for regression, max for classification)
+```
+
+- **`enable`**: Turn early stopping on or off.
+- **`patience`**: Stop if the monitored metric does not improve for this many epochs. Required when `enable` is true.
+- **`monitor`** / **`mode`**: Optional. When omitted, the same metric and mode as the checkpoint section are used (e.g. `val_mse` with `min` for regression, `val_acc1` with `max` for classification).
 
 ### Logging Configuration
 

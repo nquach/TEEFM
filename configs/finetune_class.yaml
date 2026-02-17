@@ -3,7 +3,7 @@
 
 data:
   # Optimized dataset directories (created with litdata.optimize())
-  train_optimized_dir: "s3://tee-2023-2024/labeled-datasets/opt_RVIO_mPAP"
+  train_optimized_dir: "s3://tee-2023-2024/labeled-datasets/opt_RVIO_RVQual"
   val_optimized_dir: null  # Optional
   test_optimized_dir: null  # Optional
   
@@ -39,10 +39,10 @@ model:
   # Task type: "classification" or "regression" (default: "classification")
   # - "classification": Use CrossEntropyLoss, output num_classes logits, track accuracy metrics
   # - "regression": Use MSELoss or L1Loss, output output_dim values, track MSE/MAE/R² metrics
-  task_type: "regression"  # Change to "regression" for continuous variable prediction
+  task_type: "classification"  # Change to "regression" for continuous variable prediction
   
   # Number of classes for classification (used when task_type="classification")
-  num_classes: 101
+  num_classes: 6
   
   # Output dimension for regression (used when task_type="regression", default: 1 for single-value regression)
   output_dim: 1
@@ -81,9 +81,9 @@ training:
   temporal_stride: 1
   
   # Batch size
-  batch_size: 64
-  val_batch_size: 64  # Optional, defaults to batch_size
-  test_batch_size: 64  # Optional, defaults to batch_size
+  batch_size: 32
+  val_batch_size: 32  # Optional, defaults to batch_size
+  test_batch_size: 32  # Optional, defaults to batch_size
   
   # Number of epochs
   max_epochs: 100
@@ -102,7 +102,7 @@ training:
   val_check_interval: 1.0
   
   # Training strategy (ddp, deepspeed, etc.)
-  strategy: "ddp"  # or "deepspeed" for DeepSpeed
+  strategy: "auto"  # or "deepspeed" for DeepSpeed
   
   # Random seed
   seed: 0
@@ -170,8 +170,8 @@ features:
 early_stopping:
   enable: false
   patience: 10  # Stop if no improvement for this many epochs (required when enable is true)
-  # monitor: "val_mse"  # Optional; defaults to same as checkpoint
-  # mode: "min"          # Optional; defaults to same as checkpoint
+  # monitor: "val_acc1"  # Optional; defaults to same as checkpoint
+  # mode: "max"          # Optional; defaults to same as checkpoint
 
 checkpoint:
   # Enable checkpoint saving

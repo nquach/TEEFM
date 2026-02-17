@@ -166,6 +166,13 @@ features:
   model_ema_decay: 0.9999
   model_ema_force_cpu: false
 
+# Stop training if monitored validation metric does not improve for N epochs (monitor/mode default to checkpoint)
+early_stopping:
+  enable: false
+  patience: 10  # Stop if no improvement for this many epochs (required when enable is true)
+  # monitor: "val_acc1"  # Optional; defaults to same as checkpoint
+  # mode: "max"          # Optional; defaults to same as checkpoint
+
 checkpoint:
   # Enable checkpoint saving
   enable: true
