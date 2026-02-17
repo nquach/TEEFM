@@ -8,7 +8,7 @@ creation for VideoMAE finetuning with optimized labeled litdata datasets.
 import os
 import torch
 import pytorch_lightning as pl
-from litdata import StreamingDataLoader
+from litdata import StreamingDataLoader, train_test_split
 
 from .optimized_labeled_video_dataset import OptimizedLabeledVideoDataset
 from torchvision.transforms.v2 import Normalize, RandomResizedCrop, Compose, CenterCrop, Resize
@@ -26,21 +26,6 @@ def safe_makedir(path):
     """Safely create directory if it doesn't exist."""
     if not os.path.exists(path):
         os.makedirs(path)
-
-
-class _LabeledDatasetTransformWrapper(torch.utils.data.Dataset):
-    """Wraps a dataset and applies a transform to the first element (video) of each sample; label unchanged."""
-
-    def __init__(self, base_dataset, transform):
-        self.base_dataset = base_dataset
-        self.transform = transform
-
-    def __len__(self):
-        return len(self.base_dataset)
-
-    def __getitem__(self, idx):
-        video, label = self.base_dataset[idx]
-        return self.transform(video), label
 
 
 class FinetuningVideoDataModule(pl.LightningDataModule):
@@ -120,13 +105,13 @@ class FinetuningVideoDataModule(pl.LightningDataModule):
         use_split = val_data_dir is None and test_data_dir is None and split_ratios is not None
         
         if use_split:
-            # Split single dataset at train_optimized_dir into train/val/test by user-defined ratios
+            # Split single dataset at train_optimized_dir into train/val/test using litdata's train_test_split
             if len(split_ratios) != 3:
                 raise ValueError("train_val_test_split must be a list of three numbers [train_ratio, val_ratio, test_ratio]")
             total = sum(split_ratios)
             if abs(total - 1.0) > 1e-6:
                 raise ValueError(f"train_val_test_split must sum to 1.0, got {total}")
-            print("Splitting train_optimized_dir into train/val/test by train_val_test_split")
+            print("Splitting train_optimized_dir into train/val/test by train_val_test_split (litdata)")
             full_dataset = OptimizedLabeledVideoDataset(
                 data_dir=train_data_dir,
                 frames_to_sample=self.training_config.get('frames_to_sample', 16),
@@ -139,18 +124,16 @@ class FinetuningVideoDataModule(pl.LightningDataModule):
                 drop_last=False,
                 storage_options=storage_opts
             )
-            n = len(full_dataset)
-            train_len = int(n * split_ratios[0])
-            val_len = int(n * split_ratios[1])
-            test_len = n - train_len - val_len
-            train_subset, val_subset, test_subset = torch.utils.data.random_split(
-                full_dataset,
-                [train_len, val_len, test_len],
-                generator=torch.Generator().manual_seed(seed)
-            )
-            self.train_dataset = _LabeledDatasetTransformWrapper(train_subset, self.train_transform)
-            self.val_dataset = _LabeledDatasetTransformWrapper(val_subset, self.val_transform)
-            self.test_dataset = _LabeledDatasetTransformWrapper(test_subset, self.test_transform)
+            train_ds, val_ds, test_ds = train_test_split(full_dataset, splits=split_ratios)
+            # Apply split-specific transforms (litdata split datasets may support custom_transform or transform)
+            for ds, t in [(train_ds, self.train_transform), (val_ds, self.val_transform), (test_ds, self.test_transform)]:
+                if hasattr(ds, 'custom_transform'):
+                    ds.custom_transform = t
+                elif hasattr(ds, 'transform'):
+                    ds.transform = t
+            self.train_dataset = train_ds
+            self.val_dataset = val_ds
+            self.test_dataset = test_ds
             print(f'Split: train={len(self.train_dataset)}, val={len(self.val_dataset)}, test={len(self.test_dataset)}')
         else:
             # Use separate dirs: train from train_optimized_dir, val/test from their dirs if provided
