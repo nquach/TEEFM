@@ -333,15 +333,28 @@ def create_videomae_finetune_model(
                     print(f"Removing key {k} from pretrained checkpoint (shape mismatch)")
                     del checkpoint_model[k]
             
-            # Strip key prefixes (backbone., encoder.)
+            # Strip key prefixes so checkpoint matches VisionTransformer (encoder-only finetune model).
+            # Pretrain checkpoints may use model.encoder.* (e.g. from Lightning) or encoder.* / backbone.*
             all_keys = list(checkpoint_model.keys())
             new_dict = OrderedDict()
             for key in all_keys:
-                if key.startswith('backbone.'):
-                    new_dict[key[9:]] = checkpoint_model[key]  # Remove 'backbone.' prefix
+                if key.startswith('model.encoder.'):
+                    # Lightning / wrapper: model.encoder.patch_embed -> patch_embed, model.encoder.norm -> fc_norm
+                    suffix = key[14:]
+                    if suffix.startswith('norm.'):
+                        new_dict['fc_norm.' + suffix[5:]] = checkpoint_model[key]
+                    else:
+                        new_dict[suffix] = checkpoint_model[key]
+                elif key.startswith('backbone.'):
+                    new_dict[key[9:]] = checkpoint_model[key]
                 elif key.startswith('encoder.'):
-                    new_dict[key[8:]] = checkpoint_model[key]  # Remove 'encoder.' prefix
-                else:
+                    suffix = key[8:]
+                    if suffix.startswith('norm.'):
+                        new_dict['fc_norm.' + suffix[5:]] = checkpoint_model[key]
+                    else:
+                        new_dict[suffix] = checkpoint_model[key]
+                elif not key.startswith('model.'):
+                    # Keep top-level keys (e.g. pos_embed) from other formats; skip model.mask_token, model.decoder.*
                     new_dict[key] = checkpoint_model[key]
             checkpoint_model = new_dict
             
