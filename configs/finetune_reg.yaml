@@ -17,8 +17,8 @@ data:
   subset_ratio: null
   
   # Normalization (ImageNet defaults for classification)
-  normalize_mean: [0.485, 0.456, 0.406]
-  normalize_std: [0.229, 0.224, 0.225]
+  normalize_mean: [0.117, 0.114, 0.113]
+  normalize_std: [0.208, 0.204, 0.203]
   
   # Cloud storage type (if using S3/remote datasets)
   cloud_type: 's3_public'  # or null for local datasets
@@ -28,7 +28,7 @@ model:
   backbone: "vit-b"
   
   # Path to pretrained checkpoint from pretraining
-  pretrained_path: "path/to/pretrained/checkpoint.pth"
+  pretrained_path: "/teamspace/studios/this_studio/checkpoints/videomae_VitB_radam_LR1E3_BS64x16_-200-0.3081.ckpt.bin"
   
   # Model key to look for in checkpoint (separated by '|' to try multiple keys)
   model_key: "model|module"
@@ -39,7 +39,7 @@ model:
   # Task type: "classification" or "regression" (default: "classification")
   # - "classification": Use CrossEntropyLoss, output num_classes logits, track accuracy metrics
   # - "regression": Use MSELoss or L1Loss, output output_dim values, track MSE/MAE/R² metrics
-  task_type: "classification"  # Change to "regression" for continuous variable prediction
+  task_type: "regression"  # Change to "regression" for continuous variable prediction
   
   # Number of classes for classification (used when task_type="classification")
   num_classes: 101
@@ -81,9 +81,9 @@ training:
   temporal_stride: 1
   
   # Batch size
-  batch_size: 8
-  val_batch_size: 8  # Optional, defaults to batch_size
-  test_batch_size: 8  # Optional, defaults to batch_size
+  batch_size: 64
+  val_batch_size: 64  # Optional, defaults to batch_size
+  test_batch_size: 64  # Optional, defaults to batch_size
   
   # Number of epochs
   max_epochs: 100
@@ -109,7 +109,7 @@ training:
 
 optimizer:
   # Schedule-free optimizer type: "adamw" or "radam"
-  type: "adamw"
+  type: "radam"
   
   # Learning rate
   lr: 1e-3
@@ -180,10 +180,10 @@ checkpoint:
   # For classification: "val_acc1" (maximize, mode='max')
   # For regression: "val_mse" (minimize, mode='min')
   # The finetune.py script will automatically set mode based on task_type
-  monitor: "val_acc1"  # For classification; use "val_mse" for regression
+  monitor: "val_mse"  # For classification; use "val_mse" for regression
   
   # Save top K checkpoints
-  save_top_k: 1
+  save_top_k: 3
   
   # Whether to save the last checkpoint in addition to top_k (default: false to save disk space)
   save_last: false
