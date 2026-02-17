@@ -8,7 +8,7 @@ enabling easy multi-GPU training, checkpointing, and logging for classification 
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
-from torchmetrics.classification import MulticlassAccuracy
+from torchmetrics.classification import MulticlassAccuracy, F1Score, AUROC
 from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError, R2Score
 import sys
 
@@ -103,8 +103,12 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
             self.train_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=top_k_5)
             self.val_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1)
             self.val_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=top_k_5)
+            self.val_f1 = F1Score(task="multiclass", num_classes=num_classes, average="macro")
+            self.val_auroc = AUROC(task="multiclass", num_classes=num_classes, average="macro")
             self.test_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1)
             self.test_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=top_k_5)
+            self.test_f1 = F1Score(task="multiclass", num_classes=num_classes, average="macro")
+            self.test_auroc = AUROC(task="multiclass", num_classes=num_classes, average="macro")
         else:  # regression
             self.train_mse = MeanSquaredError()
             self.train_mae = MeanAbsoluteError()
@@ -284,11 +288,15 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
             # Update accuracy metrics
             self.val_acc1(outputs, targets.long())
             self.val_acc5(outputs, targets.long())
+            self.val_f1(outputs, targets.long())
+            self.val_auroc(outputs, targets.long())
             
             # Log metrics
             self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
             self.log('val_acc1', self.val_acc1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
             self.log('val_acc5', self.val_acc5, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('val_f1', self.val_f1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('val_auroc', self.val_auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         else:  # regression
             # Update regression metrics
             self.val_mse(outputs, targets.float())
@@ -331,11 +339,15 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
             # Update accuracy metrics
             self.test_acc1(outputs, targets.long())
             self.test_acc5(outputs, targets.long())
+            self.test_f1(outputs, targets.long())
+            self.test_auroc(outputs, targets.long())
             
             # Log metrics
             self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
             self.log('test_acc1', self.test_acc1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
             self.log('test_acc5', self.test_acc5, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('test_f1', self.test_f1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            self.log('test_auroc', self.test_auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         else:  # regression
             # Update regression metrics
             self.test_mse(outputs, targets.float())
