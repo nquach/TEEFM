@@ -81,9 +81,9 @@ training:
   temporal_stride: 1
   
   # Batch size
-  batch_size: 64
-  val_batch_size: 64  # Optional, defaults to batch_size
-  test_batch_size: 64  # Optional, defaults to batch_size
+  batch_size: 32
+  val_batch_size: 32  # Optional, defaults to batch_size
+  test_batch_size: 32  # Optional, defaults to batch_size
   
   # Number of epochs
   max_epochs: 100
@@ -102,7 +102,7 @@ training:
   val_check_interval: 1.0
   
   # Training strategy (ddp, deepspeed, etc.)
-  strategy: "ddp"  # or "deepspeed" for DeepSpeed
+  strategy: "auto"  # or "deepspeed" for DeepSpeed
   
   # Random seed
   seed: 0
@@ -140,7 +140,7 @@ augmentation:
   cutmix_minmax: null
   
   # Probability of applying mixup/cutmix
-  mixup_prob: 1.0
+  mixup_prob: 0
   
   # Probability of switching to cutmix when both are active
   mixup_switch_prob: 0.5
@@ -168,7 +168,7 @@ features:
 
 # Stop training if monitored validation metric does not improve for N epochs (monitor/mode default to checkpoint)
 early_stopping:
-  enable: false
+  enable: true
   patience: 10  # Stop if no improvement for this many epochs (required when enable is true)
   # monitor: "val_mse"  # Optional; defaults to same as checkpoint
   # mode: "min"          # Optional; defaults to same as checkpoint
@@ -187,7 +187,7 @@ checkpoint:
   # For classification: "val_acc1" (maximize, mode='max')
   # For regression: "val_mse" (minimize, mode='min')
   # The finetune.py script will automatically set mode based on task_type
-  monitor: "val_mse"  # For classification; use "val_mse" for regression
+  monitor: "val_mae"  # For classification; use "val_mse" for regression
   
   # Save top K checkpoints
   save_top_k: 3

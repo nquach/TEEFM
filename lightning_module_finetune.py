@@ -98,12 +98,13 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
         # Metrics (conditional on task type)
         if self.task_type == 'classification':
             num_classes = self.model_config.get('num_classes', 101)
+            top_k_5 = min(5, num_classes)  # top_k must be <= num_classes (e.g. binary: top_k=2)
             self.train_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1)
-            self.train_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=5)
+            self.train_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=top_k_5)
             self.val_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1)
-            self.val_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=5)
+            self.val_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=top_k_5)
             self.test_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1)
-            self.test_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=5)
+            self.test_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=top_k_5)
         else:  # regression
             self.train_mse = MeanSquaredError()
             self.train_mae = MeanAbsoluteError()
