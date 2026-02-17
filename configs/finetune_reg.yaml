@@ -3,7 +3,7 @@
 
 data:
   # Optimized dataset directories (created with litdata.optimize())
-  train_optimized_dir: "s3://tee-2023-2024/opt_RVIO_mPAP"
+  train_optimized_dir: "s3://tee-2023-2024/labeled-datasets/opt_RVIO_mPAP"
   val_optimized_dir: null  # Optional
   test_optimized_dir: null  # Optional
   
