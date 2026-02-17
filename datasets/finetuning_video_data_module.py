@@ -6,12 +6,14 @@ creation for VideoMAE finetuning with optimized labeled litdata datasets.
 """
 
 import os
+from functools import partial
+
 import torch
 import pytorch_lightning as pl
 from litdata import StreamingDataLoader, train_test_split
 
 from .optimized_labeled_video_dataset import OptimizedLabeledVideoDataset
-from torchvision.transforms.v2 import Normalize, RandomResizedCrop, Compose, CenterCrop, Resize
+from torchvision.transforms.v2 import RandomResizedCrop, Compose, CenterCrop, Resize
 
 import botocore
 
@@ -26,6 +28,13 @@ def safe_makedir(path):
     """Safely create directory if it doesn't exist."""
     if not os.path.exists(path):
         os.makedirs(path)
+
+
+def _normalize_video(x, mean, std):
+    """Normalize video tensor [C, T, H, W] by channel. mean, std: length-3 lists."""
+    m = torch.tensor(mean, dtype=x.dtype, device=x.device).view(-1, 1, 1, 1)
+    s = torch.tensor(std, dtype=x.dtype, device=x.device).view(-1, 1, 1, 1)
+    return (x - m) / s
 
 
 class FinetuningVideoDataModule(pl.LightningDataModule):
@@ -74,11 +83,11 @@ class FinetuningVideoDataModule(pl.LightningDataModule):
         crop_scale = self.model_config.get('crop_scale', [0.75, 1.0])
         crop_aspect_ratio = self.model_config.get('crop_aspect_ratio', [0.8, 1.2])
         
-        # Create transforms
+        # Create transforms (video-aware normalization for [C, T, H, W])
         # Training: RandomResizedCrop + Normalize
         self.train_transform = Compose([
             RandomResizedCrop(size=input_size, scale=tuple(crop_scale), ratio=tuple(crop_aspect_ratio)),
-            Normalize(normalize_mean, normalize_std)
+            partial(_normalize_video, mean=normalize_mean, std=normalize_std)
         ])
         
         # Validation/Test: CenterCrop or Resize + Normalize
@@ -86,7 +95,7 @@ class FinetuningVideoDataModule(pl.LightningDataModule):
         self.val_transform = Compose([
             Resize(int(input_size * 1.14)),  # Slightly larger for center crop
             CenterCrop(input_size),
-            Normalize(normalize_mean, normalize_std)
+            partial(_normalize_video, mean=normalize_mean, std=normalize_std)
         ])
         self.test_transform = self.val_transform  # Same as validation
         
