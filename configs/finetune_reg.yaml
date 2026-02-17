@@ -3,9 +3,9 @@
 
 data:
   # Optimized dataset directories (created with litdata.optimize())
-  train_optimized_dir: "path/to/train/optimized/dataset"
-  val_optimized_dir: "path/to/val/optimized/dataset"  # Optional
-  test_optimized_dir: "path/to/test/optimized/dataset"  # Optional
+  train_optimized_dir: "s3://tee-2023-2024/opt_RVIO_mPAP"
+  val_optimized_dir: null  # Optional
+  test_optimized_dir: null  # Optional
   
   # train_val_test_split: [0.8, 0.1, 0.1]  # Only used when val_optimized_dir and test_optimized_dir are null
   

@@ -28,6 +28,21 @@ def safe_makedir(path):
         os.makedirs(path)
 
 
+class _LabeledDatasetTransformWrapper(torch.utils.data.Dataset):
+    """Wraps a dataset and applies a transform to the first element (video) of each sample; label unchanged."""
+
+    def __init__(self, base_dataset, transform):
+        self.base_dataset = base_dataset
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.base_dataset)
+
+    def __getitem__(self, idx):
+        video, label = self.base_dataset[idx]
+        return self.transform(video), label
+
+
 class FinetuningVideoDataModule(pl.LightningDataModule):
     """
     PyTorch Lightning DataModule for VideoMAE finetuning.
@@ -93,63 +108,98 @@ class FinetuningVideoDataModule(pl.LightningDataModule):
         cache_dir = self.data_config.get('cache_dir')
         safe_makedir(cache_dir)
         
-        if stage == 'fit' or stage is None:
-            # Training dataset
-            train_data_dir = self.data_config.get('train_optimized_dir')
-            if train_data_dir is None:
-                raise ValueError("train_optimized_dir is not specified in config")
-            
-            print("Using optimized litdata datasets for training")
-            self.train_dataset = OptimizedLabeledVideoDataset(
+        train_data_dir = self.data_config.get('train_optimized_dir')
+        if train_data_dir is None:
+            raise ValueError("train_optimized_dir is not specified in config")
+        val_data_dir = self.data_config.get('val_optimized_dir')
+        test_data_dir = self.data_config.get('test_optimized_dir')
+        split_ratios = self.data_config.get('train_val_test_split')
+        seed = self.training_config.get('seed', 0)
+        storage_opts = custom_storage_options if self.data_config.get('cloud_type', 's3_public') == 's3_public' else None
+        
+        use_split = val_data_dir is None and test_data_dir is None and split_ratios is not None
+        
+        if use_split:
+            # Split single dataset at train_optimized_dir into train/val/test by user-defined ratios
+            if len(split_ratios) != 3:
+                raise ValueError("train_val_test_split must be a list of three numbers [train_ratio, val_ratio, test_ratio]")
+            total = sum(split_ratios)
+            if abs(total - 1.0) > 1e-6:
+                raise ValueError(f"train_val_test_split must sum to 1.0, got {total}")
+            print("Splitting train_optimized_dir into train/val/test by train_val_test_split")
+            full_dataset = OptimizedLabeledVideoDataset(
                 data_dir=train_data_dir,
                 frames_to_sample=self.training_config.get('frames_to_sample', 16),
                 temporal_stride=self.training_config.get('temporal_stride', 1),
-                subset_ratio=self.data_config.get('subset_ratio'),
-                seed=self.training_config.get('seed', 0),
-                transform=self.train_transform,
+                subset_ratio=None,
+                seed=seed,
+                transform=None,
                 cache_dir=cache_dir,
                 max_cache_size=self.data_config.get('max_cache_size', '50GB'),
-                drop_last=True,
-                storage_options=custom_storage_options if self.data_config.get('cloud_type', 's3_public') == 's3_public' else None
+                drop_last=False,
+                storage_options=storage_opts
             )
-            print(f'Created optimized training dataset from {train_data_dir} of length {len(self.train_dataset)}')
-            
-            # Validation dataset (optional)
-            val_data_dir = self.data_config.get('val_optimized_dir')
-            if val_data_dir is not None:
-                print("Using optimized litdata datasets for validation")
-                self.val_dataset = OptimizedLabeledVideoDataset(
-                    data_dir=val_data_dir,
+            n = len(full_dataset)
+            train_len = int(n * split_ratios[0])
+            val_len = int(n * split_ratios[1])
+            test_len = n - train_len - val_len
+            train_subset, val_subset, test_subset = torch.utils.data.random_split(
+                full_dataset,
+                [train_len, val_len, test_len],
+                generator=torch.Generator().manual_seed(seed)
+            )
+            self.train_dataset = _LabeledDatasetTransformWrapper(train_subset, self.train_transform)
+            self.val_dataset = _LabeledDatasetTransformWrapper(val_subset, self.val_transform)
+            self.test_dataset = _LabeledDatasetTransformWrapper(test_subset, self.test_transform)
+            print(f'Split: train={len(self.train_dataset)}, val={len(self.val_dataset)}, test={len(self.test_dataset)}')
+        else:
+            # Use separate dirs: train from train_optimized_dir, val/test from their dirs if provided
+            if stage == 'fit' or stage is None:
+                print("Using optimized litdata datasets for training")
+                self.train_dataset = OptimizedLabeledVideoDataset(
+                    data_dir=train_data_dir,
                     frames_to_sample=self.training_config.get('frames_to_sample', 16),
                     temporal_stride=self.training_config.get('temporal_stride', 1),
-                    subset_ratio=None,  # Usually use full validation set
-                    seed=self.training_config.get('seed', 0),
-                    transform=self.val_transform,
+                    subset_ratio=self.data_config.get('subset_ratio'),
+                    seed=seed,
+                    transform=self.train_transform,
                     cache_dir=cache_dir,
                     max_cache_size=self.data_config.get('max_cache_size', '50GB'),
-                    drop_last=False,
-                    storage_options=custom_storage_options if self.data_config.get('cloud_type', 's3_public') == 's3_public' else None
+                    drop_last=True,
+                    storage_options=storage_opts
                 )
-                print(f'Created optimized validation dataset from {val_data_dir} of length {len(self.val_dataset)}')
-        
-        if stage == 'test' or stage is None:
-            # Test dataset (optional)
-            test_data_dir = self.data_config.get('test_optimized_dir')
-            if test_data_dir is not None:
-                print("Using optimized litdata datasets for testing")
-                self.test_dataset = OptimizedLabeledVideoDataset(
-                    data_dir=test_data_dir,
-                    frames_to_sample=self.training_config.get('frames_to_sample', 16),
-                    temporal_stride=self.training_config.get('temporal_stride', 1),
-                    subset_ratio=None,  # Usually use full test set
-                    seed=self.training_config.get('seed', 0),
-                    transform=self.test_transform,
-                    cache_dir=cache_dir,
-                    max_cache_size=self.data_config.get('max_cache_size', '50GB'),
-                    drop_last=False,
-                    storage_options=custom_storage_options if self.data_config.get('cloud_type', 's3_public') == 's3_public' else None
-                )
-                print(f'Created optimized test dataset from {test_data_dir} of length {len(self.test_dataset)}')
+                print(f'Created optimized training dataset from {train_data_dir} of length {len(self.train_dataset)}')
+                if val_data_dir is not None:
+                    print("Using optimized litdata datasets for validation")
+                    self.val_dataset = OptimizedLabeledVideoDataset(
+                        data_dir=val_data_dir,
+                        frames_to_sample=self.training_config.get('frames_to_sample', 16),
+                        temporal_stride=self.training_config.get('temporal_stride', 1),
+                        subset_ratio=None,
+                        seed=seed,
+                        transform=self.val_transform,
+                        cache_dir=cache_dir,
+                        max_cache_size=self.data_config.get('max_cache_size', '50GB'),
+                        drop_last=False,
+                        storage_options=storage_opts
+                    )
+                    print(f'Created optimized validation dataset from {val_data_dir} of length {len(self.val_dataset)}')
+            if stage == 'test' or stage is None:
+                if test_data_dir is not None:
+                    print("Using optimized litdata datasets for testing")
+                    self.test_dataset = OptimizedLabeledVideoDataset(
+                        data_dir=test_data_dir,
+                        frames_to_sample=self.training_config.get('frames_to_sample', 16),
+                        temporal_stride=self.training_config.get('temporal_stride', 1),
+                        subset_ratio=None,
+                        seed=seed,
+                        transform=self.test_transform,
+                        cache_dir=cache_dir,
+                        max_cache_size=self.data_config.get('max_cache_size', '50GB'),
+                        drop_last=False,
+                        storage_options=storage_opts
+                    )
+                    print(f'Created optimized test dataset from {test_data_dir} of length {len(self.test_dataset)}')
     
     def train_dataloader(self):
         """

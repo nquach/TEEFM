@@ -346,7 +346,7 @@ Visualizations are saved as PNG image grids with:
 - **Column 3**: Reconstructed video frames
 
 Filename format: `video_{index}_reconstruction_grid.png`
-
+ 
 ### Configuration Requirements
 
 The config file must include:
@@ -396,6 +396,8 @@ data:
   # Cloud storage (null for local, 's3_public' for S3)
   cloud_type: null
 ```
+
+When `val_optimized_dir` and `test_optimized_dir` are null, you can split the dataset at `train_optimized_dir` into train/val/test by setting `train_val_test_split: [train_ratio, val_ratio, test_ratio]` (e.g. `[0.8, 0.1, 0.1]`). The three ratios must sum to 1.0. If either val or test dir is set, the split is ignored and separate dirs are used.
 
 ### Model Configuration
 
