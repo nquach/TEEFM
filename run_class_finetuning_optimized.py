@@ -80,27 +80,26 @@ BACKBONE_TO_MODEL = {
 
 
 def build_args_from_config(config):
-    """Build a minimal args-like object for utils.save_model and compatibility."""
+    """Build a minimal args-like object for utils.save_model and compatibility (picklable via Namespace)."""
     out_cfg = config.get("output", {})
     train_cfg = config["training"]
-    opt_cfg = config.get("optimizer", {})
     model_cfg = config["model"]
-    return type("Args", (), {
-        "output_dir": out_cfg.get("output_dir", "output"),
-        "log_dir": out_cfg.get("log_dir"),
-        "save_ckpt": out_cfg.get("save_ckpt", True),
-        "save_ckpt_freq": out_cfg.get("save_ckpt_freq", 5),
-        "resume": "",
-        "auto_resume": False,
-        "clip_grad": train_cfg.get("gradient_clip_val", 0) or None,
-        "distributed": False,
-        "num_frames": train_cfg.get("num_frames", 16),
-        "num_segments": train_cfg.get("num_segments", 1),
-        "model_key": model_cfg.get("model_key", "model|module"),
-        "model_prefix": model_cfg.get("model_prefix", ""),
-        "window_size": None,
-        "patch_size": None,
-    })()
+    return argparse.Namespace(
+        output_dir=out_cfg.get("output_dir", "output"),
+        log_dir=out_cfg.get("log_dir"),
+        save_ckpt=out_cfg.get("save_ckpt", True),
+        save_ckpt_freq=out_cfg.get("save_ckpt_freq", 5),
+        resume="",
+        auto_resume=False,
+        clip_grad=train_cfg.get("gradient_clip_val", 0) or None,
+        distributed=False,
+        num_frames=train_cfg.get("num_frames", 16),
+        num_segments=train_cfg.get("num_segments", 1),
+        model_key=model_cfg.get("model_key", "model|module"),
+        model_prefix=model_cfg.get("model_prefix", ""),
+        window_size=None,
+        patch_size=None,
+    )
 
 
 def main():

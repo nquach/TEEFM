@@ -30,7 +30,7 @@ model:
   use_mean_pooling: true
   init_scale: 0.001
   use_checkpoint: false
-  mcm: false
+  mcm: true
   mcm_ratio: 0.4
 
 training:
