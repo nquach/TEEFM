@@ -234,14 +234,26 @@ def main():
             if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
                 print(f"Removing key {k} from pretrained checkpoint")
                 del checkpoint_model[k]
+        # Strip key prefixes so checkpoint matches VisionTransformer (encoder-only finetune model).
+        # Pretrain/Lightning checkpoints may use model.encoder.* or encoder.* / backbone.*
         all_keys = list(checkpoint_model.keys())
         new_dict = OrderedDict()
         for key in all_keys:
-            if key.startswith("backbone."):
+            if key.startswith("model.encoder."):
+                suffix = key[14:]
+                if suffix.startswith("norm."):
+                    new_dict["fc_norm." + suffix[5:]] = checkpoint_model[key]
+                else:
+                    new_dict[suffix] = checkpoint_model[key]
+            elif key.startswith("backbone."):
                 new_dict[key[9:]] = checkpoint_model[key]
             elif key.startswith("encoder."):
-                new_dict[key[8:]] = checkpoint_model[key]
-            else:
+                suffix = key[8:]
+                if suffix.startswith("norm."):
+                    new_dict["fc_norm." + suffix[5:]] = checkpoint_model[key]
+                else:
+                    new_dict[suffix] = checkpoint_model[key]
+            elif not key.startswith("model."):
                 new_dict[key] = checkpoint_model[key]
         checkpoint_model = new_dict
         if "pos_embed" in checkpoint_model:
