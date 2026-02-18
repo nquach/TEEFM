@@ -8,7 +8,7 @@ from mixup import Mixup
 from timm.utils import accuracy, ModelEma
 import utils
 from scipy.special import softmax
-from sklearn.metrics import roc_auc_score, f1_score, balanced_accuracy_score
+from sklearn.metrics import roc_auc_score, f1_score, balanced_accuracy_score, recall_score
 
 
 def train_class_batch(model, samples, target, criterion):
@@ -205,15 +205,21 @@ def validation_one_epoch(data_loader, model, device):
 
         balanced_acc = balanced_accuracy_score(targets_np, preds)
         stats['balanced_acc'] = balanced_acc
+
+        # Weighted accuracy: weighted average of per-class recall (by support)
+        weighted_acc = recall_score(targets_np, preds, average='weighted', zero_division=0)
+        stats['weighted_acc'] = weighted_acc
     else:
         stats['auroc'] = float('nan')
         stats['f1'] = 0.0
         stats['balanced_acc'] = 0.0
+        stats['weighted_acc'] = 0.0
 
     print('* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f} '
-          'auroc {auroc:.3f} f1 {f1:.3f} balanced_acc {balanced_acc:.3f}'
+          'auroc {auroc:.3f} f1 {f1:.3f} balanced_acc {balanced_acc:.3f} weighted_acc {weighted_acc:.3f}'
           .format(top1=metric_logger.acc1, top5=metric_logger.acc5, losses=metric_logger.loss,
-                  auroc=stats['auroc'], f1=stats['f1'], balanced_acc=stats['balanced_acc']))
+                  auroc=stats['auroc'], f1=stats['f1'], balanced_acc=stats['balanced_acc'],
+                  weighted_acc=stats['weighted_acc']))
 
     return stats
 

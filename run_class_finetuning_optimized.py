@@ -392,7 +392,8 @@ def main():
             auroc_val = test_stats.get("auroc", float("nan"))
             f1_val = test_stats.get("f1", 0.0)
             bal_acc_val = test_stats.get("balanced_acc", 0.0)
-            print(f"Val AUC-ROC: {auroc_val:.4f}  F1 (macro): {f1_val:.4f}  Balanced acc: {bal_acc_val:.4f}")
+            weighted_acc_val = test_stats.get("weighted_acc", 0.0)
+            print(f"Val AUC-ROC: {auroc_val:.4f}  F1 (macro): {f1_val:.4f}  Balanced acc: {bal_acc_val:.4f}  Weighted acc: {weighted_acc_val:.4f}")
             if max_accuracy < test_stats["acc1"]:
                 max_accuracy = test_stats["acc1"]
                 if args.output_dir and args.save_ckpt:
@@ -405,6 +406,7 @@ def main():
                 log_writer.update(val_auroc=auroc_val, head="perf", step=epoch)
                 log_writer.update(val_f1=f1_val, head="perf", step=epoch)
                 log_writer.update(val_balanced_acc=bal_acc_val, head="perf", step=epoch)
+                log_writer.update(val_weighted_acc=weighted_acc_val, head="perf", step=epoch)
             log_stats = {**{f"train_{k}": v for k, v in train_stats.items()}, **{f"val_{k}": v for k, v in test_stats.items()}, "epoch": epoch, "n_parameters": n_parameters}
         else:
             log_stats = {**{f"train_{k}": v for k, v in train_stats.items()}, "epoch": epoch, "n_parameters": n_parameters}
