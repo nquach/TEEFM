@@ -389,6 +389,10 @@ def main():
             test_stats = validation_one_epoch(val_loader, model, device)
             n_val = len(val_dataset) if val_dataset is not None else 0
             print(f"Accuracy of the network on the {n_val} val videos: {test_stats['acc1']:.1f}%")
+            auroc_val = test_stats.get("auroc", float("nan"))
+            f1_val = test_stats.get("f1", 0.0)
+            bal_acc_val = test_stats.get("balanced_acc", 0.0)
+            print(f"Val AUC-ROC: {auroc_val:.4f}  F1 (macro): {f1_val:.4f}  Balanced acc: {bal_acc_val:.4f}")
             if max_accuracy < test_stats["acc1"]:
                 max_accuracy = test_stats["acc1"]
                 if args.output_dir and args.save_ckpt:
@@ -398,6 +402,9 @@ def main():
                 log_writer.update(val_acc1=test_stats["acc1"], head="perf", step=epoch)
                 log_writer.update(val_acc5=test_stats["acc5"], head="perf", step=epoch)
                 log_writer.update(val_loss=test_stats["loss"], head="perf", step=epoch)
+                log_writer.update(val_auroc=auroc_val, head="perf", step=epoch)
+                log_writer.update(val_f1=f1_val, head="perf", step=epoch)
+                log_writer.update(val_balanced_acc=bal_acc_val, head="perf", step=epoch)
             log_stats = {**{f"train_{k}": v for k, v in train_stats.items()}, **{f"val_{k}": v for k, v in test_stats.items()}, "epoch": epoch, "n_parameters": n_parameters}
         else:
             log_stats = {**{f"train_{k}": v for k, v in train_stats.items()}, "epoch": epoch, "n_parameters": n_parameters}

@@ -5,6 +5,7 @@ decord
 einops
 opencv-python
 scipy
+scikit-learn
 pandas
 pytorch-lightning>=2.0.0
 pyyaml

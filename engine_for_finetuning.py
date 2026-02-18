@@ -8,6 +8,7 @@ from mixup import Mixup
 from timm.utils import accuracy, ModelEma
 import utils
 from scipy.special import softmax
+from sklearn.metrics import roc_auc_score, f1_score, balanced_accuracy_score
 
 
 def train_class_batch(model, samples, target, criterion):
@@ -150,6 +151,9 @@ def validation_one_epoch(data_loader, model, device):
     # switch to evaluation mode
     model.eval()
 
+    all_outputs = []
+    all_targets = []
+
     for batch in metric_logger.log_every(data_loader, 10, header):
         videos = batch[0]
         target = batch[1]
@@ -167,12 +171,51 @@ def validation_one_epoch(data_loader, model, device):
         metric_logger.update(loss=loss.item())
         metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
         metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
+
+        all_outputs.append(output.float().cpu())
+        all_targets.append(target.cpu())
+
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
-    print('* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}'
-          .format(top1=metric_logger.acc1, top5=metric_logger.acc5, losses=metric_logger.loss))
 
-    return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    # Compute AUC-ROC, F1, balanced accuracy from accumulated predictions
+    stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+    if all_outputs and all_targets:
+        logits = torch.cat(all_outputs, dim=0).numpy()
+        targets_np = torch.cat(all_targets, dim=0).numpy()
+        probs = softmax(logits, axis=1)
+        preds = np.argmax(logits, axis=1)
+        n_classes = probs.shape[1]
+
+        try:
+            if n_classes == 2:
+                # binary: use probability of positive class
+                auroc = roc_auc_score(targets_np, probs[:, 1], average='macro')
+            else:
+                auroc = roc_auc_score(
+                    targets_np, probs, multi_class='ovr', average='macro'
+                )
+        except ValueError:
+            # e.g. only one class present in y_true
+            auroc = float('nan')
+        stats['auroc'] = auroc
+
+        f1 = f1_score(targets_np, preds, average='macro', zero_division=0)
+        stats['f1'] = f1
+
+        balanced_acc = balanced_accuracy_score(targets_np, preds)
+        stats['balanced_acc'] = balanced_acc
+    else:
+        stats['auroc'] = float('nan')
+        stats['f1'] = 0.0
+        stats['balanced_acc'] = 0.0
+
+    print('* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f} '
+          'auroc {auroc:.3f} f1 {f1:.3f} balanced_acc {balanced_acc:.3f}'
+          .format(top1=metric_logger.acc1, top5=metric_logger.acc5, losses=metric_logger.loss,
+                  auroc=stats['auroc'], f1=stats['f1'], balanced_acc=stats['balanced_acc']))
+
+    return stats
 
 
 
