@@ -12,7 +12,7 @@ This script handles:
 import os
 import yaml
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
+from pytorch_lightning.callbacks import Callback, EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 import torch
 
@@ -37,6 +37,30 @@ def load_config(config_path):
         config = yaml.safe_load(f)
     
     return config
+
+
+class RegressionValidationDisplay(Callback):
+    """
+    Callback that prints validation R² (and MSE/MAE) to the console at the end of
+    each validation run when the task is regression, so metrics are clearly displayed.
+    """
+    def __init__(self, task_type='regression'):
+        super().__init__()
+        self.task_type = task_type.lower()
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        if self.task_type != 'regression':
+            return
+        metrics = trainer.callback_metrics
+        if 'val_r2' in metrics:
+            val_r2 = metrics['val_r2'].item() if hasattr(metrics['val_r2'], 'item') else float(metrics['val_r2'])
+            print(f"Validation R²: {val_r2:.4f}")
+        if 'val_mse' in metrics:
+            val_mse = metrics['val_mse'].item() if hasattr(metrics['val_mse'], 'item') else float(metrics['val_mse'])
+            print(f"Validation MSE: {val_mse:.4f}")
+        if 'val_mae' in metrics:
+            val_mae = metrics['val_mae'].item() if hasattr(metrics['val_mae'], 'item') else float(metrics['val_mae'])
+            print(f"Validation MAE: {val_mae:.4f}")
 
 
 def main():
@@ -182,6 +206,10 @@ def main():
             )
         )
         print(f"Early stopping: patience={patience}, monitor={early_monitor}")
+    
+    # Display validation R² (and MSE/MAE) for regression tasks
+    if task_type == 'regression':
+        callbacks_list.append(RegressionValidationDisplay(task_type=task_type))
     
     # Create trainer
     trainer = pl.Trainer(
