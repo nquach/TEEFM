@@ -13,6 +13,7 @@ from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError, R2Score
 import sys
 
 from modeling.model_factory import create_videomae_finetune_model
+from optim_factory import LayerDecayValueAssigner, get_parameter_groups
 from optimizers.schedule_free_optimizer import create_schedule_free_optimizer
 from mixup import Mixup
 
@@ -232,13 +233,9 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
         if self.task_type == 'classification':
             # Compute accuracy (only if not using mixup, as mixup uses soft labels)
             if self.mixup_fn is None:
-                # Update accuracy metrics
+                # Update accuracy metrics (not logged; only train_loss and train_loss_epoch are shown)
                 self.train_acc1(outputs, targets.long())
                 self.train_acc5(outputs, targets.long())
-                
-                # Log metrics
-                self.log('train_acc1', self.train_acc1, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-                self.log('train_acc5', self.train_acc5, on_step=True, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         else:  # regression
             # Update regression metrics
             self.train_mse(outputs, targets.float())
@@ -423,15 +420,57 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
         else:
             betas = (0.9, 0.95)
         
-        optimizer = create_schedule_free_optimizer(
-            self.model,
-            optimizer_type=self.optimizer_config.get('type', 'adamw'),
-            lr=lr,
-            weight_decay=weight_decay,
-            betas=betas,
-            eps=eps,
-            warmup_steps=warmup_steps
-        )
+        # Layer-wise LR decay: when layer_decay < 1.0, build param groups with per-layer scales
+        layer_decay = self.optimizer_config.get('layer_decay', 1.0)
+        if isinstance(layer_decay, (list, tuple)):
+            layer_decay = float(layer_decay[0]) if len(layer_decay) > 0 else 1.0
+        else:
+            layer_decay = float(layer_decay)
+        
+        if layer_decay < 1.0:
+            num_layers = self.model.get_num_layers()
+            assigner = LayerDecayValueAssigner(
+                [layer_decay ** (num_layers + 1 - i) for i in range(num_layers + 2)]
+            )
+            skip_list = self.model.no_weight_decay()
+            raw_groups = get_parameter_groups(
+                self.model,
+                weight_decay,
+                skip_list,
+                assigner.get_layer_id,
+                assigner.get_scale,
+            )
+            param_groups = [
+                {
+                    "params": g["params"],
+                    "lr": lr * g["lr_scale"],
+                    "weight_decay": g["weight_decay"],
+                }
+                for g in raw_groups
+            ]
+            # Optional: log min/max LR across param groups for verification
+            lrs = [pg["lr"] for pg in param_groups]
+            print(
+                f"Layer-wise LR decay: layer_decay={layer_decay}, num_layers={num_layers}, "
+                f"min_lr={min(lrs):.2e}, max_lr={max(lrs):.2e}, num_groups={len(param_groups)}"
+            )
+            optimizer = create_schedule_free_optimizer(
+                optimizer_type=self.optimizer_config.get('type', 'adamw'),
+                betas=betas,
+                eps=eps,
+                warmup_steps=warmup_steps,
+                param_groups=param_groups,
+            )
+        else:
+            optimizer = create_schedule_free_optimizer(
+                self.model,
+                optimizer_type=self.optimizer_config.get('type', 'adamw'),
+                lr=lr,
+                weight_decay=weight_decay,
+                betas=betas,
+                eps=eps,
+                warmup_steps=warmup_steps,
+            )
         
         # Store optimizer reference for train/eval mode switching
         self._optimizer = optimizer

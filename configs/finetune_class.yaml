@@ -125,6 +125,9 @@ optimizer:
   
   # Warmup steps (only applies to AdamWScheduleFree)
   warmup_steps: 0
+  
+  # Layer-wise LR decay (1.0 = disabled). Values < 1.0 scale down LR for deeper layers; head gets full LR (e.g. 0.75 for VideoMAE-style finetuning).
+  layer_decay: 0.75
 
 augmentation:
   # Label smoothing
