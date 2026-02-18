@@ -17,7 +17,7 @@ data:
 
 model:
   backbone: "vit-b"  # vit-s, vit-b, vit-l, vit-h
-  pretrained_path: ""  # Path to pretrained checkpoint
+  pretrained_path: "/teamspace/studios/this_studio/checkpoints/videomae_VitB_radam_LR1E3_BS64x16_-200-0.3081.ckpt.bin"  # Path to pretrained checkpoint
   model_key: "model|module"
   model_prefix: ""
   num_classes: 6
