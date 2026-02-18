@@ -113,7 +113,7 @@ def main():
             videos, targets = batch
             batch_size = videos.shape[0]
             n_show = min(num_label_samples, batch_size)
-            label_list = targets.cpu().tolist()
+            label_list = targets.cpu().flatten().tolist()
             if n_show > 0 and isinstance(label_list[0], float):
                 label_preview = [round(y, 4) for y in label_list[:n_show]]
             else:
@@ -128,7 +128,7 @@ def main():
                 videos_val, targets_val = batch_val
                 batch_size_val = videos_val.shape[0]
                 n_show_val = min(num_label_samples, batch_size_val)
-                label_list_val = targets_val.cpu().tolist()
+                label_list_val = targets_val.cpu().flatten().tolist()
                 if n_show_val > 0 and isinstance(label_list_val[0], float):
                     label_preview_val = [round(y, 4) for y in label_list_val[:n_show_val]]
                 else:
