@@ -5,6 +5,7 @@ This module provides a PyTorch Lightning wrapper for the VideoMAE finetuning mod
 enabling easy multi-GPU training, checkpointing, and logging for classification and regression tasks.
 """
 
+import random
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
@@ -137,6 +138,16 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
             self.test_mse = MeanSquaredError()
             self.test_mae = MeanAbsoluteError()
             self.test_r2 = R2Score()
+            # Sanity check: buffer of (pred, target) for printing a random sample after each val run
+            self._val_preds_buffer = []
+            self._val_targets_buffer = []
+            self._regression_sanity_check = self.training_config.get('regression_sanity_check', True)
+            self._regression_sanity_check_num_samples = self.training_config.get(
+                'regression_sanity_check_num_samples', 10
+            )
+            self._regression_sanity_check_buffer_cap = self.training_config.get(
+                'regression_sanity_check_buffer_cap', 200
+            )
         
         # Mixup/Cutmix setup (only for classification)
         self.mixup_fn = None
@@ -332,8 +343,51 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
             self.log('val_mse', self.val_mse, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
             self.log('val_mae', self.val_mae, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
             self.log('val_r2', self.val_r2, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            
+            # Sanity check: accumulate (pred, target) up to cap for printing at epoch end
+            if self._regression_sanity_check and len(self._val_preds_buffer) < self._regression_sanity_check_buffer_cap:
+                preds_cpu = outputs.detach().cpu()
+                targets_cpu = targets.detach().cpu()
+                n = preds_cpu.size(0)
+                remaining = self._regression_sanity_check_buffer_cap - len(self._val_preds_buffer)
+                to_take = min(n, remaining)
+                for i in range(to_take):
+                    self._val_preds_buffer.append(preds_cpu[i].clone())
+                    self._val_targets_buffer.append(targets_cpu[i].clone())
         
         return loss
+    
+    def on_validation_epoch_end(self):
+        """After validation epoch: for regression, print a random sample of pred vs target (sanity check)."""
+        if self.task_type != 'regression':
+            return
+        if not self._regression_sanity_check or len(self._val_preds_buffer) == 0:
+            self._val_preds_buffer = []
+            self._val_targets_buffer = []
+            return
+        n_show = min(self._regression_sanity_check_num_samples, len(self._val_preds_buffer))
+        indices = random.sample(range(len(self._val_preds_buffer)), n_show)
+        if self.trainer is not None and self.trainer.global_rank == 0:
+            print("Regression validation sanity check (random sample):")
+            for i, idx in enumerate(indices):
+                p = self._val_preds_buffer[idx]
+                t = self._val_targets_buffer[idx]
+                if p.numel() == 1 and t.numel() == 1:
+                    pred_val = p.flatten().tolist()[0]
+                    target_val = t.flatten().tolist()[0]
+                    print(f"  [{i}] pred: {pred_val:.4f}, target: {target_val:.4f}")
+                else:
+                    pred_list = p.flatten().tolist()
+                    target_list = t.flatten().tolist()
+                    if len(pred_list) > 6:
+                        pred_str = "[" + ", ".join(f"{x:.3f}" for x in pred_list[:5]) + f", ... ({len(pred_list)} dims)]"
+                        target_str = "[" + ", ".join(f"{x:.3f}" for x in target_list[:5]) + f", ... ({len(target_list)} dims)]"
+                    else:
+                        pred_str = "[" + ", ".join(f"{x:.3f}" for x in pred_list) + "]"
+                        target_str = "[" + ", ".join(f"{x:.3f}" for x in target_list) + "]"
+                    print(f"  [{i}] pred: {pred_str}, target: {target_str}")
+        self._val_preds_buffer = []
+        self._val_targets_buffer = []
     
     def test_step(self, batch, batch_idx):
         """
