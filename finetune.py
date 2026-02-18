@@ -101,6 +101,44 @@ def main():
     if data_module.test_dataset is not None:
         print(f"Test dataset size: {len(data_module.test_dataset)}")
     
+    # Dataset sanity check: print a random sample (1 batch) from train/val before finetuning
+    # Config: training.dataset_sanity_check (default True), training.dataset_sanity_check_num_label_samples (default 10)
+    sanity_check_enabled = config.get('training', {}).get('dataset_sanity_check', True)
+    num_label_samples = config.get('training', {}).get('dataset_sanity_check_num_label_samples', 10)
+    task_type = config['model'].get('task_type', 'classification').lower()
+    if sanity_check_enabled:
+        try:
+            train_loader = data_module.train_dataloader()
+            batch = next(iter(train_loader))
+            videos, targets = batch
+            batch_size = videos.shape[0]
+            n_show = min(num_label_samples, batch_size)
+            label_list = targets.cpu().tolist()
+            if n_show > 0 and isinstance(label_list[0], float):
+                label_preview = [round(y, 4) for y in label_list[:n_show]]
+            else:
+                label_preview = label_list[:n_show] if n_show > 0 else []
+            label_kind = "target values" if task_type == "regression" else "class labels"
+            print("Dataset sanity check (1 train batch):")
+            print(f"  batch_size={batch_size}, video shape={list(videos.shape)}")
+            print(f"  {label_kind} (first {n_show}): {label_preview}")
+            if data_module.val_dataset is not None:
+                val_loader = data_module.val_dataloader()
+                batch_val = next(iter(val_loader))
+                videos_val, targets_val = batch_val
+                batch_size_val = videos_val.shape[0]
+                n_show_val = min(num_label_samples, batch_size_val)
+                label_list_val = targets_val.cpu().tolist()
+                if n_show_val > 0 and isinstance(label_list_val[0], float):
+                    label_preview_val = [round(y, 4) for y in label_list_val[:n_show_val]]
+                else:
+                    label_preview_val = label_list_val[:n_show_val] if n_show_val > 0 else []
+                print("Dataset sanity check (1 val batch):")
+                print(f"  batch_size={batch_size_val}, video shape={list(videos_val.shape)}")
+                print(f"  {label_kind} (first {n_show_val}): {label_preview_val}")
+        except Exception as e:
+            print(f"Dataset sanity check failed (non-fatal): {e}")
+    
     # Create Lightning module
     print("Creating model...")
     model = VideoMAEFinetuningLightningModule(config)
