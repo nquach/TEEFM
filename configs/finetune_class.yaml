@@ -118,7 +118,7 @@ optimizer:
   weight_decay: 0.05
   
   # Beta parameters for Adam-based optimizers
-  betas: [0.9, 0.95]
+  betas: [0.9, 0.999]
   
   # Epsilon for numerical stability
   eps: 1e-8
@@ -190,7 +190,7 @@ checkpoint:
   # For classification: "val_acc1" (maximize, mode='max')
   # For regression: "val_mse" (minimize, mode='min')
   # The finetune.py script will automatically set mode based on task_type
-  monitor: "val_acc1"  # For classification; use "val_mse" for regression
+  monitor: "val_auroc"  # For classification; use "val_mse" for regression
   
   # Save top K checkpoints
   save_top_k: 3

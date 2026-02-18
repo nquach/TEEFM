@@ -8,7 +8,14 @@ enabling easy multi-GPU training, checkpointing, and logging for classification 
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
-from torchmetrics.classification import MulticlassAccuracy, F1Score, AUROC
+from torchmetrics.classification import (
+    MulticlassAccuracy,
+    F1Score,
+    AUROC,
+    BinaryAccuracy,
+    BinaryAUROC,
+    BinaryF1Score,
+)
 from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError, R2Score
 import sys
 
@@ -99,17 +106,27 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
         # Metrics (conditional on task type)
         if self.task_type == 'classification':
             num_classes = self.model_config.get('num_classes', 101)
-            top_k_5 = min(5, num_classes)  # top_k must be <= num_classes (e.g. binary: top_k=2)
-            self.train_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1, average="weighted")
-            self.train_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=top_k_5, average="weighted")
-            self.val_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1, average="weighted")
-            self.val_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=top_k_5, average="weighted")
-            self.val_f1 = F1Score(task="multiclass", num_classes=num_classes, average="weighted")
-            self.val_auroc = AUROC(task="multiclass", num_classes=num_classes, average="weighted")
-            self.test_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1, average="weighted")
-            self.test_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=top_k_5, average="weighted")
-            self.test_f1 = F1Score(task="multiclass", num_classes=num_classes, average="weighted")
-            self.test_auroc = AUROC(task="multiclass", num_classes=num_classes, average="weighted")
+            self.is_binary = (num_classes == 2)
+            if self.is_binary:
+                self.train_acc1 = BinaryAccuracy()
+                self.val_acc1 = BinaryAccuracy()
+                self.val_f1 = BinaryF1Score()
+                self.val_auroc = BinaryAUROC()
+                self.test_acc1 = BinaryAccuracy()
+                self.test_f1 = BinaryF1Score()
+                self.test_auroc = BinaryAUROC()
+            else:
+                top_k_5 = min(5, num_classes)  # top_k must be <= num_classes (e.g. binary: top_k=2)
+                self.train_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1, average="weighted")
+                self.train_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=top_k_5, average="weighted")
+                self.val_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1, average="weighted")
+                self.val_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=top_k_5, average="weighted")
+                self.val_f1 = F1Score(task="multiclass", num_classes=num_classes, average="weighted")
+                self.val_auroc = AUROC(task="multiclass", num_classes=num_classes, average="weighted")
+                self.test_acc1 = MulticlassAccuracy(num_classes=num_classes, top_k=1, average="weighted")
+                self.test_acc5 = MulticlassAccuracy(num_classes=num_classes, top_k=top_k_5, average="weighted")
+                self.test_f1 = F1Score(task="multiclass", num_classes=num_classes, average="weighted")
+                self.test_auroc = AUROC(task="multiclass", num_classes=num_classes, average="weighted")
         else:  # regression
             self.train_mse = MeanSquaredError()
             self.train_mae = MeanAbsoluteError()
@@ -233,9 +250,12 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
         if self.task_type == 'classification':
             # Compute accuracy (only if not using mixup, as mixup uses soft labels)
             if self.mixup_fn is None:
-                # Update accuracy metrics (not logged; only train_loss and train_loss_epoch are shown)
-                self.train_acc1(outputs, targets.long())
-                self.train_acc5(outputs, targets.long())
+                if self.is_binary:
+                    probs_pos = torch.softmax(outputs, dim=1)[:, 1]
+                    self.train_acc1(probs_pos, targets.long())
+                else:
+                    self.train_acc1(outputs, targets.long())
+                    self.train_acc5(outputs, targets.long())
         else:  # regression
             # Update regression metrics
             self.train_mse(outputs, targets.float())
@@ -282,18 +302,25 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
         
         # Update and log metrics based on task type
         if self.task_type == 'classification':
-            # Update accuracy metrics
-            self.val_acc1(outputs, targets.long())
-            self.val_acc5(outputs, targets.long())
-            self.val_f1(outputs, targets.long())
-            self.val_auroc(outputs, targets.long())
-            
-            # Log metrics
-            self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-            self.log('val_acc1', self.val_acc1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-            self.log('val_acc5', self.val_acc5, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-            self.log('val_f1', self.val_f1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-            self.log('val_auroc', self.val_auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            if self.is_binary:
+                probs_pos = torch.softmax(outputs, dim=1)[:, 1]
+                self.val_acc1(probs_pos, targets.long())
+                self.val_f1(probs_pos, targets.long())
+                self.val_auroc(probs_pos, targets.long())
+                self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                self.log('val_acc1', self.val_acc1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                self.log('val_f1', self.val_f1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                self.log('val_auroc', self.val_auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            else:
+                self.val_acc1(outputs, targets.long())
+                self.val_acc5(outputs, targets.long())
+                self.val_f1(outputs, targets.long())
+                self.val_auroc(outputs, targets.long())
+                self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                self.log('val_acc1', self.val_acc1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                self.log('val_acc5', self.val_acc5, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                self.log('val_f1', self.val_f1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                self.log('val_auroc', self.val_auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         else:  # regression
             # Update regression metrics
             self.val_mse(outputs, targets.float())
@@ -333,18 +360,25 @@ class VideoMAEFinetuningLightningModule(pl.LightningModule):
         
         # Update and log metrics based on task type
         if self.task_type == 'classification':
-            # Update accuracy metrics
-            self.test_acc1(outputs, targets.long())
-            self.test_acc5(outputs, targets.long())
-            self.test_f1(outputs, targets.long())
-            self.test_auroc(outputs, targets.long())
-            
-            # Log metrics
-            self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-            self.log('test_acc1', self.test_acc1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-            self.log('test_acc5', self.test_acc5, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-            self.log('test_f1', self.test_f1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
-            self.log('test_auroc', self.test_auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            if self.is_binary:
+                probs_pos = torch.softmax(outputs, dim=1)[:, 1]
+                self.test_acc1(probs_pos, targets.long())
+                self.test_f1(probs_pos, targets.long())
+                self.test_auroc(probs_pos, targets.long())
+                self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                self.log('test_acc1', self.test_acc1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                self.log('test_f1', self.test_f1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                self.log('test_auroc', self.test_auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+            else:
+                self.test_acc1(outputs, targets.long())
+                self.test_acc5(outputs, targets.long())
+                self.test_f1(outputs, targets.long())
+                self.test_auroc(outputs, targets.long())
+                self.log('test_loss', loss, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                self.log('test_acc1', self.test_acc1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                self.log('test_acc5', self.test_acc5, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                self.log('test_f1', self.test_f1, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
+                self.log('test_auroc', self.test_auroc, on_step=False, on_epoch=True, prog_bar=True, logger=True, sync_dist=True)
         else:  # regression
             # Update regression metrics
             self.test_mse(outputs, targets.float())
