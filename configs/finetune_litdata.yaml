@@ -1,0 +1,75 @@
+# LitData classification finetuning configuration
+# VideoMAE finetuning on LitData-optimized (video, label) dataset
+
+# Data configuration
+data:
+  # Path to optimized train dataset (required)
+  train_optimized_dir: "path/to/train/optimized"
+  # Optional: separate val/test dirs. If all three are set, train_val_test_split is ignored.
+  val_optimized_dir: null
+  test_optimized_dir: null
+  # When val/test dirs are null, split train into train/val/test by these ratios (must sum to 1.0)
+  train_val_test_split: [0.8, 0.1, 0.1]
+  cache_dir: "./output/cache"
+  max_cache_size: "50GB"
+  cloud_type: "s3_public"
+  # Number of classes (required for classification head)
+  num_classes: 101
+  num_workers: 10
+  pin_memory: true
+  # Normalization (optional; applied to video tensors)
+  normalize_mean: [0.485, 0.456, 0.406]
+  normalize_std: [0.229, 0.224, 0.225]
+
+# Model configuration (finetune head)
+model:
+  backbone: "vit-b"
+  pretrained_path: "path/to/videomae/checkpoint.pth"
+  num_frames: 16
+  tubelet_size: 2
+  input_size: 224
+  fc_drop_rate: 0.0
+  drop_rate: 0.0
+  drop_path: 0.1
+  attn_drop_rate: 0.0
+  use_checkpoint: false
+  use_mean_pooling: true
+  init_scale: 0.001
+  model_key: "model|module"
+  model_prefix: ""
+  mcm: false
+  mcm_ratio: 0.4
+
+# Training configuration
+training:
+  batch_size: 32
+  epochs: 30
+  seed: 0
+  device: "cuda"
+  # Early stopping: stop if no improvement for this many epochs
+  early_stopping_patience: 5
+  # Metric to monitor for early stopping and best checkpoint: "val_weighted_acc" or "val_loss"
+  early_stopping_metric: "val_weighted_acc"
+  # Higher is better for val_weighted_acc; lower is better for val_loss
+  early_stopping_mode: "max"
+  update_freq: 1
+  clip_grad: null
+
+# Optimizer (schedule-free: RAdam or AdamW)
+optimizer:
+  type: "radam"
+  lr: 1e-3
+  weight_decay: 0.05
+  layer_decay: 0.75
+  betas: [0.9, 0.95]
+  eps: 1e-8
+  warmup_steps: 0
+
+# Checkpointing and logging
+checkpoint:
+  output_dir: "./output/finetune_litdata"
+  log_dir: "./output/finetune_litdata/logs"
+  save_ckpt: true
+  save_ckpt_freq: 5
+  resume: ""
+  auto_resume: false
