@@ -4,7 +4,7 @@
 # Data configuration
 data:
   # Path to optimized train dataset (required)
-  train_optimized_dir: "path/to/train/optimized"
+  train_optimized_dir: 's3://tee-2023-2024/labeled-datasets/opt_RVIO_RVQual'
   # Optional: separate val/test dirs. If all three are set, train_val_test_split is ignored.
   val_optimized_dir: null
   test_optimized_dir: null
@@ -14,17 +14,17 @@ data:
   max_cache_size: "50GB"
   cloud_type: "s3_public"
   # Number of classes (required for classification head)
-  num_classes: 101
+  num_classes: 6
   num_workers: 10
   pin_memory: true
   # Normalization (optional; applied to video tensors)
-  normalize_mean: [0.485, 0.456, 0.406]
-  normalize_std: [0.229, 0.224, 0.225]
+  normalize_mean: [0.117, 0.114, 0.113]
+  normalize_std: [0.208, 0.204, 0.203]
 
 # Model configuration (finetune head)
 model:
   backbone: "vit-b"
-  pretrained_path: "path/to/videomae/checkpoint.pth"
+  pretrained_path: "/teamspace/studios/this_studio/checkpoints/videomae_VitB_radam_LR1E3_BS64x16_-200-0.3081.ckpt.bin"
   num_frames: 16
   tubelet_size: 2
   input_size: 224
@@ -45,7 +45,7 @@ training:
   batch_size: 32
   epochs: 30
   seed: 0
-  device: "cuda"
+  device: "auto"
   # Early stopping: stop if no improvement for this many epochs
   early_stopping_patience: 5
   # Metric to monitor for early stopping and best checkpoint: "val_weighted_acc" or "val_loss"
@@ -61,7 +61,7 @@ optimizer:
   lr: 1e-3
   weight_decay: 0.05
   layer_decay: 0.75
-  betas: [0.9, 0.95]
+  betas: [0.9, 0.999]
   eps: 1e-8
   warmup_steps: 0
 
