@@ -77,7 +77,7 @@ class LitDataLabeledDataset(StreamingDataset):
         else:
             label = int(label)
 
-        return video, label
+        return video.clone(), label
 
 
 def build_litdata_finetune_datasets(data_config, seed=0):
