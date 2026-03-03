@@ -45,7 +45,7 @@ training:
   batch_size: 32
   epochs: 30
   seed: 0
-  device: "auto"
+  device: "cuda"
   # Early stopping: stop if no improvement for this many epochs
   early_stopping_patience: 5
   # Metric to monitor for early stopping and best checkpoint: "val_weighted_acc" or "val_loss"

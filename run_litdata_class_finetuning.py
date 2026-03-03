@@ -331,6 +331,10 @@ def main():
     layer_decay = optimizer_config.get("layer_decay", 0.75)
     weight_decay = optimizer_config.get("weight_decay", 0.05)
     base_lr = optimizer_config.get("lr", 1e-3)
+    if isinstance(base_lr, (list, tuple)):
+        base_lr = float(base_lr[0])
+    else:
+        base_lr = float(base_lr)
 
     if layer_decay < 1.0:
         assigner = LayerDecayValueAssigner(
