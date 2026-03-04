@@ -276,10 +276,10 @@ class VisionTransformer(nn.Module):
             x = x[~mask].reshape(B, -1, C)
         x = self.pos_drop(x)
 
-        if self.use_checkpoint:
+        if self.use_checkpoint and self.training:
             for blk in self.blocks:
-                x = checkpoint.checkpoint(blk, x)
-        else:   
+                x = checkpoint.checkpoint(blk, x, use_reentrant=False)
+        else:
             for blk in self.blocks:
                 x = blk(x)
 
