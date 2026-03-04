@@ -45,8 +45,9 @@ class FinetuningLitDataDataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         seed = self.training_config.get("seed", 0)
+        num_frames = self.config.get("model", {}).get("num_frames", 16)
         self.train_ds, self.val_ds, self.test_ds, self.num_classes = build_litdata_finetune_datasets(
-            self.data_config, seed=seed
+            self.data_config, seed=seed, num_frames=num_frames
         )
 
     def train_dataloader(self):

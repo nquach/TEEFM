@@ -5,6 +5,7 @@ StreamingDataset-based loader for optimized (video, label) pairs. Supports
 train/val/test from a single directory via ratio-based split or from separate dirs.
 """
 
+import random
 import torch
 from torch.utils.data import Subset
 from litdata import StreamingDataset, StreamingDataLoader
@@ -29,6 +30,7 @@ class LitDataLabeledDataset(StreamingDataset):
         normalize_std=(0.229, 0.224, 0.225),
         subsample=None,
         seed=None,
+        num_frames=16,
     ):
         try:
             if subsample is not None:
@@ -56,6 +58,7 @@ class LitDataLabeledDataset(StreamingDataset):
         self.normalize_mean = torch.tensor(normalize_mean, dtype=torch.float32).view(3, 1, 1, 1)
         self.normalize_std = torch.tensor(normalize_std, dtype=torch.float32).view(3, 1, 1, 1)
         self._seed = seed
+        self.num_frames = num_frames
 
     def __getitem__(self, idx):
         data = super().__getitem__(idx)
@@ -71,6 +74,23 @@ class LitDataLabeledDataset(StreamingDataset):
             video = video / 255.0
         video = (video - self.normalize_mean) / self.normalize_std
 
+        # Fixed-length temporal sampling: (C, T, H, W) -> (C, num_frames, H, W)
+        T = video.shape[1]
+        if T >= self.num_frames:
+            start = random.randint(0, T - self.num_frames)
+            video = video[:, start : start + self.num_frames, :, :]
+        else:
+            # Pad by repeating the last frame
+            if T == 0:
+                # Edge case: no frames; pad with zeros
+                video = torch.zeros(
+                    video.shape[0], self.num_frames, video.shape[2], video.shape[3],
+                    dtype=video.dtype, device=video.device,
+                )
+            else:
+                repeat_last = video[:, -1:, :, :].expand(-1, self.num_frames - T, -1, -1)
+                video = torch.cat([video, repeat_last], dim=1)
+
         # Label: 1-element tensor -> int
         if isinstance(label, torch.Tensor):
             label = label.flatten()[0].long().item()
@@ -80,7 +100,7 @@ class LitDataLabeledDataset(StreamingDataset):
         return video.clone(), label
 
 
-def build_litdata_finetune_datasets(data_config, seed=0):
+def build_litdata_finetune_datasets(data_config, seed=0, num_frames=None):
     """
     Build train, val, and test datasets from data_config.
 
@@ -92,6 +112,8 @@ def build_litdata_finetune_datasets(data_config, seed=0):
     Returns:
         train_ds, val_ds, test_ds, num_classes
     """
+    if num_frames is None:
+        num_frames = data_config.get("num_frames", 16)
     train_dir = data_config.get("train_optimized_dir")
     val_dir = data_config.get("val_optimized_dir")
     test_dir = data_config.get("test_optimized_dir")
@@ -128,6 +150,7 @@ def build_litdata_finetune_datasets(data_config, seed=0):
             normalize_std=normalize_std,
             subsample=subsample,
             seed=seed,
+            num_frames=num_frames,
         )
 
     if val_dir and test_dir:
