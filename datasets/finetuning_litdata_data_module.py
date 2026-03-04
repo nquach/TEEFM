@@ -6,6 +6,7 @@ returns DataLoaders (Trainer handles DistributedSampler when using DDP).
 """
 
 import pytorch_lightning as pl
+import torch
 from torch.utils.data import DataLoader
 
 from .litdata_labeled_dataset import build_litdata_finetune_datasets
@@ -27,6 +28,21 @@ class FinetuningLitDataDataModule(pl.LightningDataModule):
         self.test_ds = None
         self.num_classes = None
 
+    @staticmethod
+    def _safe_video_label_collate(batch):
+        """
+        Collate (video, label) pairs while avoiding non-resizable storages.
+
+        LitData's StreamingDataset can yield tensors backed by mmap/zero-copy
+        buffers. PyTorch's default_collate may try to batch them via a
+        shared-memory resize path, which can raise:
+        "RuntimeError: Trying to resize storage that is not resizable".
+        """
+        videos, labels = zip(*batch)
+        videos = torch.stack([v.clone() for v in videos], dim=0)
+        labels = torch.as_tensor(labels, dtype=torch.long)
+        return videos, labels
+
     def setup(self, stage=None):
         seed = self.training_config.get("seed", 0)
         self.train_ds, self.val_ds, self.test_ds, self.num_classes = build_litdata_finetune_datasets(
@@ -43,6 +59,7 @@ class FinetuningLitDataDataModule(pl.LightningDataModule):
             num_workers=self.data_config.get("num_workers", 10),
             pin_memory=self.data_config.get("pin_memory", True),
             drop_last=True,
+            collate_fn=self._safe_video_label_collate,
         )
 
     def val_dataloader(self):
@@ -54,6 +71,7 @@ class FinetuningLitDataDataModule(pl.LightningDataModule):
             shuffle=False,
             num_workers=self.data_config.get("num_workers", 10),
             pin_memory=self.data_config.get("pin_memory", True),
+            collate_fn=self._safe_video_label_collate,
         )
 
     def test_dataloader(self):
@@ -65,4 +83,5 @@ class FinetuningLitDataDataModule(pl.LightningDataModule):
             shuffle=False,
             num_workers=self.data_config.get("num_workers", 10),
             pin_memory=self.data_config.get("pin_memory", True),
+            collate_fn=self._safe_video_label_collate,
         )
