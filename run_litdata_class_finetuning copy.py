@@ -58,6 +58,7 @@ def main():
 
     data_module = FinetuningLitDataDataModule(config)
     data_module.setup()
+    print(f"Train samples: {len(data_module.train_ds)}, val: {len(data_module.val_ds)}, test: {len(data_module.test_ds)}")
 
     model = VideoMAEFinetuneLightningModule(config)
     total_params = sum(p.numel() for p in model.parameters())
@@ -106,7 +107,7 @@ def main():
         max_epochs=training_config.get("epochs", 30),
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices="auto",
-        strategy=training_config['training'].get('strategy', 'ddp') if torch.cuda.device_count() > 1 else 'auto',
+        strategy="auto" if torch.cuda.device_count() <= 1 else "ddp",
         callbacks=callbacks,
         logger=logger,
         log_every_n_steps=10,
