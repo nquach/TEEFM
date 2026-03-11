@@ -67,9 +67,9 @@ training:
   # Early stopping: stop if no improvement for this many epochs
   early_stopping_patience: 5
   # Metric to monitor for early stopping and best checkpoint: "val_weighted_acc" or "val_loss"
-  early_stopping_metric: "val_weighted_acc"
+  early_stopping_metric: "val_loss"
   # Higher is better for val_weighted_acc; lower is better for val_loss
-  early_stopping_mode: "max"
+  early_stopping_mode: "min"
   update_freq: 1
   clip_grad: null
 
