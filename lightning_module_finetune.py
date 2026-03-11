@@ -91,18 +91,19 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         videos, targets, _ = batch
         targets = targets.long()
         logits = self.model(videos)
+        preds = torch.softmax(logits, dim=1)
         val_loss = self.criterion(logits, targets)
         if self.num_classes == 2:
-            acc = self.acc(logits, targets)
-            aucroc = self.aucroc(logits, targets)
-            f1 = self.f1(logits, targets)
+            acc = self.acc(preds, targets)
+            aucroc = self.aucroc(preds, targets)
+            f1 = self.f1(preds, targets)
             self.log_dict({'val_loss': val_loss, 'val_acc': acc, 'val_aucroc': aucroc, 'val_f1': f1}, prog_bar=True, logger=True)
         if self.num_classes > 2:
-            acc1 = self.top1_acc(logits, targets)
-            acc3 = self.top3_acc(logits, targets)
-            aucroc = self.aucroc(logits, targets)
-            f1_1 = self.top1_f1(logits, targets)
-            f1_3 = self.top3_f1(logits, targets)
+            acc1 = self.top1_acc(preds, targets)
+            acc3 = self.top3_acc(preds, targets)
+            aucroc = self.aucroc(preds, targets)
+            f1_1 = self.top1_f1(preds, targets)
+            f1_3 = self.top3_f1(preds, targets)
             self.log_dict({'val_loss': val_loss, 'val_top1_acc': acc1, 'val_top3_acc': acc3,
                 'val_aucroc': aucroc,'val_top1_f1': f1_1, 'val_top3_f1': f1_3}, 
                 prog_bar=True, logger=True)
@@ -111,18 +112,19 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         videos, targets, _ = batch
         targets = targets.long()
         logits = self.model(videos)
+        preds = torch.softmax(logits, dim=1)
         test_loss = self.criterion(logits, targets)
         if self.num_classes == 2:
-            acc = self.acc(logits, targets)
-            aucroc = self.aucroc(logits, targets)
-            f1 = self.f1(logits, targets)
+            acc = self.acc(preds, targets)
+            aucroc = self.aucroc(preds, targets)
+            f1 = self.f1(preds, targets)
             self.log_dict({'test_loss': test_loss, 'test_acc': acc, 'test_aucroc': aucroc, 'test_f1': f1}, prog_bar=True, logger=True)
         if self.num_classes > 2:
-            acc1 = self.top1_acc(logits, targets)
-            acc3 = self.top3_acc(logits, targets)
-            aucroc = self.aucroc(logits, targets)
-            f1_1 = self.top1_f1(logits, targets)
-            f1_3 = self.top3_f1(logits, targets)
+            acc1 = self.top1_acc(preds, targets)
+            acc3 = self.top3_acc(preds, targets)
+            aucroc = self.aucroc(preds, targets)
+            f1_1 = self.top1_f1(preds, targets)
+            f1_3 = self.top3_f1(preds, targets)
             self.log_dict({'test_loss': test_loss, 'test_top1_acc': acc1, 'test_top3_acc': acc3,
                 'test_aucroc': aucroc,'test_top1_f1': f1_1, 'test_top3_f1': f1_3}, 
                 prog_bar=True, logger=True)
