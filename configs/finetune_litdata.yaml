@@ -23,8 +23,6 @@ data:
 
 # Model configuration (finetune head)
 model:
-
-
   mask_type: "motion-centric"
   # Masking ratio (fraction of patches to mask)
   mask_ratio: 0.9

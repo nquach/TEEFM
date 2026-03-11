@@ -103,8 +103,8 @@ class LitDataLabeledDataset(StreamingDataset):
         # Apply transform if provided (for masking, normalization, etc.)
         if self.custom_transform is not None:
             video_tensor, mask = self.custom_transform(video_tensor.permute(0,3,1,2)) #THWC -> TCHW
-            return video_tensor, mask
+            return video_tensor, label, mask
 
         # Return video and None mask (mask will be generated elsewhere)
-        return video_tensor.permute(3,0,1,2), label #TCHW -> CTHW
+        return video_tensor.permute(3,0,1,2), label, None #TCHW -> CTHW
     

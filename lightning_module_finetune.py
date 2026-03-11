@@ -14,32 +14,7 @@ from sklearn.metrics import f1_score, recall_score, roc_auc_score
 from modeling.model_factory import create_videomae_finetune_model
 from optim_factory import LayerDecayValueAssigner, get_parameter_groups
 from optimizers.schedule_free_optimizer import create_schedule_free_optimizer
-
-
-def _compute_weighted_metrics(logits, targets, num_classes):
-    """Compute weighted AUROC, F1, accuracy, and mean loss (numpy)."""
-    probs = softmax(logits, axis=1)
-    preds = np.argmax(logits, axis=1)
-    criterion = torch.nn.CrossEntropyLoss()
-    loss = criterion(
-        torch.from_numpy(logits).float(),
-        torch.from_numpy(targets).long(),
-    ).item()
-    try:
-        if num_classes == 2:
-            auroc = roc_auc_score(targets, probs[:, 1], average="weighted")
-        else:
-            auroc = roc_auc_score(
-                targets, probs, multi_class="ovr", average="weighted"
-            )
-    except ValueError:
-        auroc = float("nan")
-    f1 = f1_score(targets, preds, average="weighted", zero_division=0)
-    weighted_acc = recall_score(
-        targets, preds, average="weighted", zero_division=0
-    )
-    return {"loss": loss, "weighted_auroc": auroc, "weighted_f1": f1, "weighted_acc": weighted_acc}
-
+from torchmetrics import Accuracy, AUCROC, F1Score
 
 class VideoMAEFinetuneLightningModule(pl.LightningModule):
     """
@@ -75,18 +50,27 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
             mcm_ratio=self.model_config.get("mcm_ratio", 0.4),
             model_key=self.model_config.get("model_key", "model|module"),
             model_prefix=self.model_config.get("model_prefix", ""),
+            task_type='classification',
+            output_dim=self.num_classes
         )
         self.criterion = torch.nn.CrossEntropyLoss()
+        if self.num_classes == 2:
+            self.acc = Accuracy(task='binary')
+            self.aucroc = AUCROC(task='binary')
+            self.f1 = F1Score(task='binary')
+        if self.num_classes > 2:
+            self.top1_acc = Accuracy(task='multiclass', num_classes=self.num_classes, top_k=1)
+            self.top3_acc = Accuracy(task='multiclass', num_classes=self.num_classes, top_k=3)
+            self.aucroc = AUCROC(task='multiclass', num_classes=self.num_classes, average='macro')
+            self.top1_f1 = F1Score(task='multiclass', num_classes=self.num_classes, average='macro', top_k=1)
+            self.top3_f1 = F1Score(task='multiclass', num_classes=self.num_classes, average='macro', top_k=3)
 
-        self._val_logits = []
-        self._val_targets = []
-        self._val_losses = []
-        self._test_logits = []
-        self._test_targets = []
-        self._test_losses = []
 
-    def forward(self, x):
-        return self.model(x)
+        self.mask_type = self.model_config.get('mask_type', 'motion-centric')
+
+
+    def forward(self, x, mask=None):
+        return self.model(x, mask)
 
     def on_before_optimizer_step(self, optimizer):
         actual_optimizer = optimizer
@@ -96,100 +80,62 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
             actual_optimizer.train()
 
     def training_step(self, batch, batch_idx):
-        samples, targets = batch
+        samples, targets, bool_masked_pos = batch
+        # Handle mask based on mask type
+        if self.mask_type != 'motion-centric' and bool_masked_pos is not None:
+            bool_masked_pos = bool_masked_pos.flatten(1).to(torch.bool)
+
         targets = targets.long()
-        logits = self(samples)
+        logits, masks = self.model(videos, bool_masked_pos)
         loss = self.criterion(logits, targets)
-        self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log("train_loss", loss, prog_bar=True, logger=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        samples, targets = batch
+        samples, targets, bool_masked_pos = batch
+        if self.mask_type != 'motion-centric' and bool_masked_pos is not None:
+            bool_masked_pos = bool_masked_pos.flatten(1).to(torch.bool)
+
         targets = targets.long()
-        logits = self(samples)
-        loss = self.criterion(logits, targets)
-        self._val_logits.append(logits.detach())
-        self._val_targets.append(targets.detach())
-        self._val_losses.append(loss.detach())
-        return loss
-
-    def on_validation_epoch_end(self):
-        if not self._val_logits:
-            return
-        logits = torch.cat(self._val_logits, dim=0)
-        targets = torch.cat(self._val_targets, dim=0)
-        self._val_logits.clear()
-        self._val_targets.clear()
-        self._val_losses.clear()
-
-        logits, targets = self._gather_logits_targets(logits, targets)
-        if logits is None:
-            return
-        metrics = _compute_weighted_metrics(
-            logits.cpu().numpy(), targets.cpu().numpy(), self.num_classes
-        )
-        self.log("val_loss", metrics["loss"], on_epoch=True, sync_dist=True)
-        self.log("val_weighted_auroc", metrics["weighted_auroc"], on_epoch=True, sync_dist=True)
-        self.log("val_weighted_f1", metrics["weighted_f1"], on_epoch=True, sync_dist=True)
-        self.log("val_weighted_acc", metrics["weighted_acc"], on_epoch=True, sync_dist=True)
+        logits, masks = self.model(videos, bool_masked_pos)
+        val_loss = self.criterion(logits, targets)
+        if self.num_classes == 2:
+            acc = self.acc(logits, targets)
+            aucroc = self.aucroc(logits, targets)
+            f1 = self.f1(logits, targets)
+            self.log_dict({'val_loss': val_loss, 'val_acc': acc, 'val_aucroc': aucroc, 'val_f1': f1}, prog_bar=True, logger=True)
+        if self.num_classes > 2:
+            acc1 = self.top1_acc(logits, targets)
+            acc3 = self.top3_acc(logits, targets)
+            aucroc = self.aucroc(logits, targets)
+            f1_1 = self.top1_f1(logits, targets)
+            f1_3 = self.top3_f1(logits, targets)
+            self.log_dict({'val_loss': val_loss, 'val_top1_acc': acc1, 'val_top3_acc': acc3,
+                'val_aucroc': aucroc,'val_top1_f1': f1_1, 'val_top3_f1': f1_3}, 
+                prog_bar=True, logger=True)
 
     def test_step(self, batch, batch_idx):
-        samples, targets = batch
+        samples, targets, bool_masked_pos = batch
+        if self.mask_type != 'motion-centric' and bool_masked_pos is not None:
+            bool_masked_pos = bool_masked_pos.flatten(1).to(torch.bool)
+
         targets = targets.long()
-        logits = self(samples)
-        loss = self.criterion(logits, targets)
-        self._test_logits.append(logits.detach())
-        self._test_targets.append(targets.detach())
-        self._test_losses.append(loss.detach())
-        return loss
-
-    def on_test_epoch_end(self):
-        if not self._test_logits:
-            return
-        logits = torch.cat(self._test_logits, dim=0)
-        targets = torch.cat(self._test_targets, dim=0)
-        self._test_logits.clear()
-        self._test_targets.clear()
-        self._test_losses.clear()
-
-        logits, targets = self._gather_logits_targets(logits, targets)
-        if logits is None:
-            return
-        metrics = _compute_weighted_metrics(
-            logits.cpu().numpy(), targets.cpu().numpy(), self.num_classes
-        )
-        self.log("test_loss", metrics["loss"], on_epoch=True, sync_dist=True)
-        self.log("test_weighted_auroc", metrics["weighted_auroc"], on_epoch=True, sync_dist=True)
-        self.log("test_weighted_f1", metrics["weighted_f1"], on_epoch=True, sync_dist=True)
-        self.log("test_weighted_acc", metrics["weighted_acc"], on_epoch=True, sync_dist=True)
-
-    def _gather_logits_targets(self, logits, targets):
-        """Gather logits and targets across ranks; return concatenated or None if empty."""
-        if self.trainer.world_size <= 1:
-            return logits, targets
-        world_size = self.trainer.world_size
-        local_size = logits.shape[0]
-        local_tensor = torch.tensor([local_size], device=logits.device, dtype=torch.long)
-        sizes_list = [torch.zeros(1, device=logits.device, dtype=torch.long) for _ in range(world_size)]
-        torch.distributed.all_gather(sizes_list, local_tensor)
-        max_size = max(s[0].item() for s in sizes_list)
-        if max_size == 0:
-            return None, None
-        if logits.shape[0] < max_size:
-            pad_logits = torch.zeros(
-                max_size - logits.shape[0], logits.shape[1],
-                device=logits.device, dtype=logits.dtype
-            )
-            logits = torch.cat([logits, pad_logits], dim=0)
-            pad_targets = torch.zeros(max_size - targets.shape[0], device=targets.device, dtype=targets.dtype)
-            targets = torch.cat([targets, pad_targets], dim=0)
-        gathered_logits = [torch.zeros_like(logits) for _ in range(world_size)]
-        gathered_targets = [torch.zeros_like(targets) for _ in range(world_size)]
-        torch.distributed.all_gather(gathered_logits, logits)
-        torch.distributed.all_gather(gathered_targets, targets)
-        parts_logits = [gathered_logits[i][:sizes_list[i][0].item()] for i in range(world_size)]
-        parts_targets = [gathered_targets[i][:sizes_list[i][0].item()] for i in range(world_size)]
-        return torch.cat(parts_logits, dim=0), torch.cat(parts_targets, dim=0)
+        logits, masks = self.model(videos, bool_masked_pos)
+        test_loss = self.criterion(logits, targets)
+        if self.num_classes == 2:
+            acc = self.acc(logits, targets)
+            aucroc = self.aucroc(logits, targets)
+            f1 = self.f1(logits, targets)
+            self.log_dict({'test_loss': test_loss, 'test_acc': acc, 'test_aucroc': aucroc, 'test_f1': f1}, prog_bar=True, logger=True)
+        if self.num_classes > 2:
+            acc1 = self.top1_acc(logits, targets)
+            acc3 = self.top3_acc(logits, targets)
+            aucroc = self.aucroc(logits, targets)
+            f1_1 = self.top1_f1(logits, targets)
+            f1_3 = self.top3_f1(logits, targets)
+            self.log_dict({'test_loss': test_loss, 'test_top1_acc': acc1, 'test_top3_acc': acc3,
+                'test_aucroc': aucroc,'test_top1_f1': f1_1, 'test_top3_f1': f1_3}, 
+                prog_bar=True, logger=True)
 
     def configure_optimizers(self):
         base_lr = self.optimizer_config.get("lr", 1e-3)

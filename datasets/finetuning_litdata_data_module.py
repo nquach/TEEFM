@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from .litdata_labeled_dataset import LitDataLabeledDataset
 from transforms.custom_transforms import DataAugmentationForVideoMAE
 from litdata import train_test_split, StreamingDataLoader
+import os
 
 import botocore
 
@@ -37,6 +38,7 @@ class FinetuningLitDataDataModule(pl.LightningDataModule):
         self.config = config
         self.data_config = config.get("data", {})
         self.training_config = config.get("training", {})
+        self.model_config = config.get("model", {})
         self.full_dataset = None
         self.train_dataset = None
         self.val_dataset = None
@@ -86,9 +88,12 @@ class FinetuningLitDataDataModule(pl.LightningDataModule):
         train_cache = self.data_config.get('train_cache_dir')
         val_cache = self.data_config.get('val_cache_dir')
         test_cache = self.data_config.get('test_cache_dir')
-        safe_makedir(train_cache)
-        safe_makedir(val_cache)
-        safe_makedir(test_cache)
+        if train_cache:
+            safe_makedir(train_cache)
+        if val_cache:
+            safe_makedir(val_cache)
+        if test_cache:
+            safe_makedir(test_cache)
         
         # Create training dataset from optimized data
         self.full_dataset = LitDataLabeledDataset(
@@ -104,7 +109,7 @@ class FinetuningLitDataDataModule(pl.LightningDataModule):
             storage_options=custom_storage_options if self.data_config.get('cloud_type', 's3_public') == 's3_public' else None
         )
         
-        if val_dir and test_dir:
+        if val_data_dir and test_data_dir:
             #Train dataset
             self.train_dataset = self.full_dataset
             #Val dataset
@@ -125,7 +130,7 @@ class FinetuningLitDataDataModule(pl.LightningDataModule):
             data_dir=test_data_dir,
             frames_to_sample=self.training_config.get('frames_to_sample', 16),
             temporal_stride=self.training_config.get('temporal_stride', 1),
-            subset_ratio=None
+            subset_ratio=None,
             seed=self.training_config.get('seed', 0),
             transform=self.transform,
             cache_dir=test_cache,
