@@ -14,7 +14,7 @@ from sklearn.metrics import f1_score, recall_score, roc_auc_score
 from modeling.model_factory import create_videomae_finetune_model
 from optim_factory import LayerDecayValueAssigner, get_parameter_groups
 from optimizers.schedule_free_optimizer import create_schedule_free_optimizer
-from torchmetrics import Accuracy, AUCROC, F1Score
+from torchmetrics import Accuracy, AUROC, F1Score
 
 class VideoMAEFinetuneLightningModule(pl.LightningModule):
     """
@@ -56,12 +56,12 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         self.criterion = torch.nn.CrossEntropyLoss()
         if self.num_classes == 2:
             self.acc = Accuracy(task='binary')
-            self.aucroc = AUCROC(task='binary')
+            self.aucroc = AUROC(task='binary')
             self.f1 = F1Score(task='binary')
         if self.num_classes > 2:
             self.top1_acc = Accuracy(task='multiclass', num_classes=self.num_classes, top_k=1)
             self.top3_acc = Accuracy(task='multiclass', num_classes=self.num_classes, top_k=3)
-            self.aucroc = AUCROC(task='multiclass', num_classes=self.num_classes, average='macro')
+            self.aucroc = AUROC(task='multiclass', num_classes=self.num_classes, average='macro')
             self.top1_f1 = F1Score(task='multiclass', num_classes=self.num_classes, average='macro', top_k=1)
             self.top3_f1 = F1Score(task='multiclass', num_classes=self.num_classes, average='macro', top_k=3)
 
@@ -80,24 +80,17 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
             actual_optimizer.train()
 
     def training_step(self, batch, batch_idx):
-        samples, targets, bool_masked_pos = batch
-        # Handle mask based on mask type
-        if self.mask_type != 'motion-centric' and bool_masked_pos is not None:
-            bool_masked_pos = bool_masked_pos.flatten(1).to(torch.bool)
-
+        videos, targets, _ = batch
         targets = targets.long()
-        logits, masks = self.model(videos, bool_masked_pos)
+        logits = self.model(videos)
         loss = self.criterion(logits, targets)
         self.log("train_loss", loss, prog_bar=True, logger=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        samples, targets, bool_masked_pos = batch
-        if self.mask_type != 'motion-centric' and bool_masked_pos is not None:
-            bool_masked_pos = bool_masked_pos.flatten(1).to(torch.bool)
-
+        videos, targets, _ = batch
         targets = targets.long()
-        logits, masks = self.model(videos, bool_masked_pos)
+        logits = self.model(videos)
         val_loss = self.criterion(logits, targets)
         if self.num_classes == 2:
             acc = self.acc(logits, targets)
@@ -115,12 +108,9 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
                 prog_bar=True, logger=True)
 
     def test_step(self, batch, batch_idx):
-        samples, targets, bool_masked_pos = batch
-        if self.mask_type != 'motion-centric' and bool_masked_pos is not None:
-            bool_masked_pos = bool_masked_pos.flatten(1).to(torch.bool)
-
+        videos, targets, _ = batch
         targets = targets.long()
-        logits, masks = self.model(videos, bool_masked_pos)
+        logits = self.model(videos)
         test_loss = self.criterion(logits, targets)
         if self.num_classes == 2:
             acc = self.acc(logits, targets)
