@@ -5,12 +5,12 @@
 # Data: single train dir, or explicit val/test dirs. When val/test dirs are not set,
 # litdata.train_test_split() is used with split_ratio to create train/val/test.
 data:
-  train_optimized_dir: 'path/to/optimized/labeled/dataset'
+  train_optimized_dir: 's3://tee-2023-2024/labeled-datasets/opt_RVIO_RVQual'
   val_optimized_dir: null   # optional; if null (and test null), use train_test_split
   test_optimized_dir: null
   split_ratio: [0.8, 0.1, 0.1]  # [train, val, test]; used only when val/test dirs are null
   cache_dir: "./output/cache_finetune"
-  num_classes: 101
+  num_classes: 6
   normalize_mean: [0.117, 0.114, 0.113]
   normalize_std: [0.208, 0.204, 0.203]
   max_cache_size: '100GB'
@@ -19,7 +19,7 @@ data:
 # Model: encoder-only classification; pretrained_path = checkpoint from pretraining (encoder+decoder).
 model:
   backbone: "vit-b"
-  pretrained_path: "checkpoints_videomae_VitB_radam_LR1E3_BS64x16_-200-0.3081.ckpt.bin"
+  pretrained_path: "/teamspace/studios/this_studio/checkpoints/videomae_VitB_radam_LR1E3_BS64x16_-200-0.3081.ckpt.bin"
   model_key: "state_dict|model|module"
   model_prefix: ""
   num_frames: 16
@@ -68,7 +68,7 @@ checkpoint:
   save_top_k: 3
   save_last: true
   strict_top_k: false
-  monitor: "val_top1_acc"
+  monitor: "val_loss"
   mode: "max"
   save_ckpt_freq: null
 
