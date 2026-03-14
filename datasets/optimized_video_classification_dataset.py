@@ -45,8 +45,11 @@ class ClassificationTransform:
             self.transform = self.normalizer
 
     def __call__(self, video):
-        # video: [C, T, H, W]
-        return self.transform(video)
+        # video: [C, T, H, W]; torchvision expects (N, C, H, W) for batch of images
+        video = video.permute(1, 0, 2, 3)   # (C, T, H, W) -> (T, C, H, W)
+        video = self.transform(video)
+        video = video.permute(1, 0, 2, 3)   # (T, C, H, W) -> (C, T, H, W)
+        return video
 
 
 class OptimizedVideoClassificationDataset(StreamingDataset):
