@@ -1,8 +1,11 @@
 """
-PyTorch Lightning DataModule for VideoMAE classification finetuning.
+PyTorch Lightning DataModule for VideoMAE finetuning (classification or regression).
 
-Uses LitData StreamingDataset. When val_optimized_dir and test_optimized_dir are not set,
-splits the training directory into train/val/test via litdata.train_test_split() and split_ratio.
+Uses LitData StreamingDataset. Set data.task to 'classification' (default) or 'regression'
+and optional data.target_key for the label field in each sample.
+
+When val_optimized_dir and test_optimized_dir are not set, splits the training directory
+into train/val/test via litdata.train_test_split() and split_ratio.
 """
 
 import os
@@ -38,14 +41,24 @@ def safe_makedir(path):
 class _ClassificationSplitWrapper(torch.utils.data.Dataset):
     """
     Wraps a StreamingDataset (e.g. one split from train_test_split) and applies
-    the same (video, label) processing as OptimizedVideoClassificationDataset.
+    the same (video, target) processing as OptimizedVideoClassificationDataset.
     """
 
-    def __init__(self, streaming_dataset, frames_to_sample, temporal_stride, transform):
+    def __init__(
+        self,
+        streaming_dataset,
+        frames_to_sample,
+        temporal_stride,
+        transform,
+        task='classification',
+        target_key='label',
+    ):
         self.streaming_dataset = streaming_dataset
         self.frames_to_sample = frames_to_sample
         self.temporal_stride = temporal_stride
         self.transform = transform
+        self.task = (task or 'classification').lower()
+        self.target_key = target_key or 'label'
 
     def __len__(self):
         return len(self.streaming_dataset)
@@ -53,11 +66,20 @@ class _ClassificationSplitWrapper(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         data = self.streaming_dataset[idx]
         video = data['video']
-        label = data['label']
-        if hasattr(label, 'item'):
-            label = int(label.item())
+        if self.target_key not in data:
+            raise KeyError(
+                f"Missing key {self.target_key!r} in sample; keys={list(data.keys())}"
+            )
+        raw_target = data[self.target_key]
+        if self.task == 'regression':
+            target = torch.as_tensor(raw_target, dtype=torch.float32).reshape(-1)
         else:
-            label = int(label)
+            label = raw_target
+            if hasattr(label, 'item'):
+                label = int(label.item())
+            else:
+                label = int(label)
+            target = label
         num_frames = video.shape[0]
         max_start = max(0, num_frames - self.frames_to_sample)
         start_frame = random.randint(0, max_start) if max_start > 0 else 0
@@ -71,12 +93,12 @@ class _ClassificationSplitWrapper(torch.utils.data.Dataset):
         video_tensor = video_tensor.permute(1, 0, 2, 3)
         if self.transform is not None:
             video_tensor = self.transform(video_tensor)
-        return video_tensor, label
+        return video_tensor, target
 
 
 class FinetuningDataModule(pl.LightningDataModule):
     """
-    DataModule for classification finetuning with LitData.
+    DataModule for finetuning with LitData (classification or regression).
     If val_optimized_dir and test_optimized_dir are set, uses three separate dirs.
     Otherwise uses train_test_split(train_optimized_dir, splits=split_ratio) for train/val/test.
     """
@@ -135,6 +157,8 @@ class FinetuningDataModule(pl.LightningDataModule):
             split_ratio = [0.8, 0.1, 0.1]
         if train_dir is None:
             raise ValueError("data.train_optimized_dir is required.")
+        task = self.data_config.get('task', 'classification')
+        target_key = self.data_config.get('target_key', 'label')
         use_explicit_splits = val_dir is not None and test_dir is not None
         if stage == 'fit' or stage is None:
             if use_explicit_splits:
@@ -147,6 +171,8 @@ class FinetuningDataModule(pl.LightningDataModule):
                     max_cache_size=max_cache,
                     drop_last=True,
                     storage_options=storage_options,
+                    task=task,
+                    target_key=target_key,
                 )
                 self.val_dataset = OptimizedVideoClassificationDataset(
                     data_dir=val_dir,
@@ -157,6 +183,8 @@ class FinetuningDataModule(pl.LightningDataModule):
                     max_cache_size=max_cache,
                     drop_last=False,
                     storage_options=storage_options,
+                    task=task,
+                    target_key=target_key,
                 )
                 print(f"Train dataset from {train_dir} (len={len(self.train_dataset)})")
                 print(f"Val dataset from {val_dir} (len={len(self.val_dataset)})")
@@ -172,13 +200,28 @@ class FinetuningDataModule(pl.LightningDataModule):
                     streaming_dataset=base_ds, splits=split_ratio
                 )
                 self.train_dataset = _ClassificationSplitWrapper(
-                    train_split, frames_to_sample, temporal_stride, self.train_transform
+                    train_split,
+                    frames_to_sample,
+                    temporal_stride,
+                    self.train_transform,
+                    task=task,
+                    target_key=target_key,
                 )
                 self.val_dataset = _ClassificationSplitWrapper(
-                    val_split, frames_to_sample, temporal_stride, self.val_transform
+                    val_split,
+                    frames_to_sample,
+                    temporal_stride,
+                    self.val_transform,
+                    task=task,
+                    target_key=target_key,
                 )
                 self.test_dataset = _ClassificationSplitWrapper(
-                    test_split, frames_to_sample, temporal_stride, self.val_transform
+                    test_split,
+                    frames_to_sample,
+                    temporal_stride,
+                    self.val_transform,
+                    task=task,
+                    target_key=target_key,
                 )
                 print(f"Split dataset from {train_dir} with ratio {split_ratio}")
                 print(f"Train len={len(self.train_dataset)}, Val len={len(self.val_dataset)}, Test len={len(self.test_dataset)}")
@@ -193,6 +236,8 @@ class FinetuningDataModule(pl.LightningDataModule):
                     max_cache_size=max_cache,
                     drop_last=False,
                     storage_options=storage_options,
+                    task=task,
+                    target_key=target_key,
                 )
                 print(f"Test dataset from {test_dir} (len={len(self.test_dataset)})")
 

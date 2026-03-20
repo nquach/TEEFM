@@ -1,0 +1,81 @@
+# VideoMAE Finetuning Configuration (Regression — continuous targets, e.g. age)
+# PyTorch Lightning + LitData StreamingDataset; schedule-free optimizer.
+# Use: python run_finetuning_regression.py --config configs/finetune_regression_vitb.yaml
+#
+# LitData samples should include:
+#   - "video": tensor
+#   - target under data.target_key (default "label"): float scalar or vector of length output_dim
+
+data:
+  task: regression
+  target_key: label   # or "target", "value", etc.
+  output_dim: 1      # head output size; use >1 for vector regression
+  train_optimized_dir: 'path/to/optimized/regression/dataset'
+  val_optimized_dir: null
+  test_optimized_dir: null
+  split_ratio: [0.8, 0.1, 0.1]
+  cache_dir: "./output/cache_finetune_regression"
+  normalize_mean: [0.117, 0.114, 0.113]
+  normalize_std: [0.208, 0.204, 0.203]
+  max_cache_size: '100GB'
+  cloud_type: 's3_public'
+
+model:
+  backbone: "vit-b"
+  pretrained_path: "checkpoints_videomae_VitB_radam_LR1E3_BS64x16_-200-0.3081.ckpt.bin"
+  model_key: "state_dict|model|module"
+  model_prefix: ""
+  num_frames: 16
+  tubelet_size: 2
+  input_size: 224
+  fc_drop_rate: 0.0
+  drop_rate: 0.0
+  drop_path: 0.1
+  attn_drop_rate: 0.0
+  use_checkpoint: false
+  use_mean_pooling: true
+  init_scale: 0.001
+  mcm: false
+  mcm_ratio: 0.4
+  crop_scale: [0.75, 1.0]
+  crop_aspect_ratio: [0.8, 1.2]
+
+loss:
+  type: mse          # mse | smooth_l1
+  beta: 1.0          # only for smooth_l1
+
+training:
+  batch_size: 32
+  max_epochs: 30
+  num_workers: 10
+  pin_memory: true
+  seed: 0
+  num_frames: 16
+  temporal_stride: 1
+  frames_to_sample: 16
+  gradient_clip_val: 0
+  accumulate_grad_batches: 1
+  strategy: "auto"
+
+optimizer:
+  type: "radam"
+  lr: 1e-3
+  weight_decay: 0.05
+  betas: [0.9, 0.95]
+  eps: 1e-8
+  warmup_steps: 0
+
+checkpoint:
+  enable: true
+  dir: "./output/checkpoints_finetune_regression"
+  prefix: "finetune_regression_vitb_"
+  save_top_k: 3
+  save_last: true
+  strict_top_k: false
+  monitor: "val_mae"
+  mode: "min"
+  save_ckpt_freq: null
+
+logging:
+  log_dir: "./output/logs_finetune_regression"
+  log_freq: 10

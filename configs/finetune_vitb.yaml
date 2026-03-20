@@ -11,8 +11,8 @@ data:
   split_ratio: [0.8, 0.1, 0.1]  # [train, val, test]; used only when val/test dirs are null
   # Optional class-imbalance weighting for CE loss.
   # If enabled, provide counts for every class id in [0, num_classes-1].
-  use_class_weights: false
-  class_distribution: null  # e.g. {0: 238, 1: 38, 2: 118, 3: 1, 4: 2416, 5: 35}
+  use_class_weights: true
+  class_distribution: {0: 238, 1: 38, 2: 118, 3: 1, 4: 2416, 5: 35}  # e.g. {0: 238, 1: 38, 2: 118, 3: 1, 4: 2416, 5: 35}
   cache_dir: "./output/cache_finetune"
   num_classes: 6
   normalize_mean: [0.117, 0.114, 0.113]

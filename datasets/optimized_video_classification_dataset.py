@@ -54,8 +54,10 @@ class ClassificationTransform:
 
 class OptimizedVideoClassificationDataset(StreamingDataset):
     """
-    LitData StreamingDataset for video classification: loads items with 'video' and 'label'.
-    Returns (video_tensor [C, T, H, W], label int).
+    LitData StreamingDataset for video classification or regression.
+    Loads items with 'video' and target under target_key (default 'label').
+    Classification: returns (video [C,T,H,W], int label).
+    Regression: returns (video [C,T,H,W], float tensor shape (1,)).
     """
 
     def __init__(
@@ -70,6 +72,8 @@ class OptimizedVideoClassificationDataset(StreamingDataset):
         max_cache_size='50GB',
         drop_last=False,
         storage_options=None,
+        task='classification',
+        target_key='label',
     ):
         try:
             if subset_ratio is not None:
@@ -96,16 +100,29 @@ class OptimizedVideoClassificationDataset(StreamingDataset):
         self.frames_to_sample = frames_to_sample
         self.temporal_stride = temporal_stride
         self.custom_transform = transform
-        print(f"Loaded optimized classification dataset from {data_dir}")
+        self.task = (task or 'classification').lower()
+        self.target_key = target_key or 'label'
+        if self.task not in ('classification', 'regression'):
+            raise ValueError(f"task must be 'classification' or 'regression', got {task!r}")
+        print(f"Loaded optimized dataset ({self.task}) from {data_dir}")
 
     def __getitem__(self, idx):
         data = super().__getitem__(idx)
         video = data['video']
-        label = data['label']
-        if hasattr(label, 'item'):
-            label = int(label.item())
+        if self.target_key not in data:
+            raise KeyError(
+                f"Missing key {self.target_key!r} in sample; keys={list(data.keys())}"
+            )
+        raw_target = data[self.target_key]
+        if self.task == 'regression':
+            target = torch.as_tensor(raw_target, dtype=torch.float32).reshape(-1)
         else:
-            label = int(label)
+            label = raw_target
+            if hasattr(label, 'item'):
+                label = int(label.item())
+            else:
+                label = int(label)
+            target = label
 
         num_frames = video.shape[0]
         max_start = max(0, num_frames - self.frames_to_sample)
@@ -122,4 +139,4 @@ class OptimizedVideoClassificationDataset(StreamingDataset):
         video_tensor = video_tensor.permute(1, 0, 2, 3)
         if self.custom_transform is not None:
             video_tensor = self.custom_transform(video_tensor)
-        return video_tensor, label
+        return video_tensor, target
