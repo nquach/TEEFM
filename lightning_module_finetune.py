@@ -5,9 +5,11 @@ Encoder-only classification, torchmetrics (Accuracy top-1/3, AUROC, F1),
 schedule-free RAdam/AdamW. Single input (video) -> logits; no mask.
 """
 
+from typing import Dict, Optional
+
 import torch
-import torch.nn as nn
 import pytorch_lightning as pl
+import torch.nn.functional as F
 from torchmetrics import Accuracy, AUROC, F1Score
 
 from modeling.model_factory import create_videomae_finetune_model
@@ -52,7 +54,11 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
             task_type="classification",
             output_dim=num_classes,
         )
-        self.criterion = nn.CrossEntropyLoss()
+        self.use_class_weights = bool(self.data_config.get("use_class_weights", False))
+        class_weights = self._build_class_weights(self.data_config.get("class_distribution"))
+        if class_weights is None:
+            class_weights = torch.empty(0, dtype=torch.float32)
+        self.register_buffer("class_weights", class_weights, persistent=True)
         if num_classes == 2:
             self.acc = Accuracy(task="binary")
             self.aucroc = AUROC(task="binary")
@@ -73,6 +79,68 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
                 average="macro",
             )
 
+    def _build_class_weights(self, distribution: Optional[Dict]) -> Optional[torch.Tensor]:
+        if not self.use_class_weights:
+            return None
+        if distribution is None:
+            raise ValueError(
+                "data.use_class_weights is true but data.class_distribution is missing."
+            )
+        if not isinstance(distribution, dict):
+            raise ValueError("data.class_distribution must be a mapping of class_id -> count.")
+
+        counts = {}
+        for raw_key, raw_value in distribution.items():
+            try:
+                class_id = int(raw_key)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Invalid class id in data.class_distribution: {raw_key}"
+                ) from exc
+            try:
+                count_value = float(raw_value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Invalid count for class {class_id}: {raw_value}"
+                ) from exc
+            if count_value <= 0:
+                raise ValueError(
+                    f"Count for class {class_id} must be > 0, got {count_value}."
+                )
+            if class_id < 0 or class_id >= self.num_classes:
+                raise ValueError(
+                    f"Class id {class_id} out of range [0, {self.num_classes - 1}]."
+                )
+            counts[class_id] = count_value
+
+        expected_ids = set(range(self.num_classes))
+        missing = sorted(expected_ids - set(counts.keys()))
+        if missing:
+            raise ValueError(
+                "data.class_distribution is missing class ids: "
+                f"{missing}. Provide counts for all classes 0..{self.num_classes - 1}."
+            )
+
+        weights = torch.tensor(
+            [1.0 / counts[class_id] for class_id in range(self.num_classes)],
+            dtype=torch.float32,
+        )
+        weights = weights / weights.sum()
+        return weights
+
+    def _compute_loss(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        if self.use_class_weights and self.class_weights.numel() == self.num_classes:
+            return F.cross_entropy(logits, targets, weight=self.class_weights)
+        return F.cross_entropy(logits, targets)
+
+    def on_fit_start(self):
+        if self.use_class_weights and self.class_weights.numel() == self.num_classes:
+            if self.trainer.is_global_zero:
+                print("Using class-weighted CrossEntropyLoss (inverse frequency, sum-normalized).")
+                print(f"Class weights: {self.class_weights.detach().cpu().tolist()}")
+        elif self.trainer.is_global_zero:
+            print("Using unweighted CrossEntropyLoss.")
+
     def forward(self, x):
         return self.model(x)
 
@@ -87,7 +155,7 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         videos, targets = batch
         targets = targets.long()
         logits = self.model(videos)
-        loss = self.criterion(logits, targets)
+        loss = self._compute_loss(logits, targets)
         self.log("train_loss", loss, prog_bar=True, logger=True)
         return loss
 
@@ -95,7 +163,7 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         videos, targets = batch
         targets = targets.long()
         logits = self.model(videos)
-        loss = self.criterion(logits, targets)
+        loss = self._compute_loss(logits, targets)
         self.log("val_loss", loss, prog_bar=True, logger=True, on_epoch=True, on_step=False)
         num_classes = self.num_classes
         if num_classes == 2:
@@ -119,7 +187,7 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         videos, targets = batch
         targets = targets.long()
         logits = self.model(videos)
-        loss = self.criterion(logits, targets)
+        loss = self._compute_loss(logits, targets)
         self.log("test_loss", loss, logger=True, on_epoch=True, on_step=False)
         num_classes = self.num_classes
         if num_classes == 2:
