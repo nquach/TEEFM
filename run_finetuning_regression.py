@@ -40,6 +40,11 @@ def main():
 
     config = load_config(args.config)
     print(f"Loaded configuration from {args.config}")
+    ev = config.get("eval") or {}
+    print(
+        f"Eval: eval_protocol={ev.get('eval_protocol', 'single_clip')}, "
+        f"video_id_key={config.get('data', {}).get('video_id_key', 'video_id')}"
+    )
 
     task = config.get('data', {}).get('task', 'classification')
     if str(task).lower() != 'regression':

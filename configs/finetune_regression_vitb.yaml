@@ -5,6 +5,7 @@
 # LitData samples should include:
 #   - "video": tensor
 #   - target under data.target_key (default "label"): float scalar or vector of length output_dim
+# For eval.eval_protocol: multi_clip, add stable string field data.video_id_key (default "video_id").
 
 data:
   task: regression
@@ -19,6 +20,13 @@ data:
   normalize_std: [0.208, 0.204, 0.203]
   max_cache_size: '100GB'
   cloud_type: 's3_public'
+
+eval:
+  eval_protocol: single_clip
+  test_num_segment: 2
+  test_num_crop: 3
+  short_side_size: 256
+  eval_center_crop_only: false
 
 model:
   backbone: "vit-b"

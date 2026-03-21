@@ -3,15 +3,22 @@ PyTorch Lightning Module for VideoMAE classification finetuning.
 
 Encoder-only classification, torchmetrics (Accuracy top-1/3, AUROC, F1),
 schedule-free RAdam/AdamW. Single input (video) -> logits; no mask.
+
+Optional eval.eval_protocol: multi_clip enables video-level metrics (mean softmax per
+video_id) logged as val_video_* / test_video_* via epoch-end buffers and self.log(..., sync_dist=True).
+
+DDP: each rank aggregates only its clips; for correct global video metrics use single-GPU val
+or ensure clips per video are not split across ranks (see datasets/finetuning_data_module.py).
 """
 
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import torch
 import pytorch_lightning as pl
 import torch.nn.functional as F
 from torchmetrics import Accuracy, AUROC, F1Score
 
+from metrics.video_eval_metrics import video_level_classification_metrics
 from modeling.model_factory import create_videomae_finetune_model
 from optimizers.schedule_free_optimizer import create_schedule_free_optimizer
 
@@ -31,6 +38,10 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         self.model_config = config.get("model", {})
         self.training_config = config.get("training", {})
         self.optimizer_config = config.get("optimizer", {})
+        eval_cfg = config.get("eval") or {}
+        self._eval_multi_clip = (
+            (eval_cfg.get("eval_protocol") or "single_clip").lower() == "multi_clip"
+        )
         num_classes = self.data_config.get("num_classes", 101)
         self.num_classes = num_classes
         self.model = create_videomae_finetune_model(
@@ -78,6 +89,12 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
                 num_classes=num_classes,
                 average="macro",
             )
+        self._val_vid_ids: List = []
+        self._val_logits: List[torch.Tensor] = []
+        self._val_targets: List[torch.Tensor] = []
+        self._test_vid_ids: List = []
+        self._test_logits: List[torch.Tensor] = []
+        self._test_targets: List[torch.Tensor] = []
 
     def _build_class_weights(self, distribution: Optional[Dict]) -> Optional[torch.Tensor]:
         if not self.use_class_weights:
@@ -140,6 +157,12 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
                 print(f"Class weights: {self.class_weights.detach().cpu().tolist()}")
         elif self.trainer.is_global_zero:
             print("Using unweighted CrossEntropyLoss.")
+        if self._eval_multi_clip and self.trainer.is_global_zero:
+            if "ddp" in str(type(self.trainer.strategy)).lower():
+                print(
+                    "eval_protocol=multi_clip: video-level metrics are computed per rank from local "
+                    "val clips only; use a single validation device for globally correct video metrics."
+                )
 
     def forward(self, x):
         return self.model(x)
@@ -151,6 +174,16 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         if hasattr(actual_optimizer, "train"):
             actual_optimizer.train()
 
+    def on_validation_epoch_start(self):
+        self._val_vid_ids.clear()
+        self._val_logits.clear()
+        self._val_targets.clear()
+
+    def on_test_epoch_start(self):
+        self._test_vid_ids.clear()
+        self._test_logits.clear()
+        self._test_targets.clear()
+
     def training_step(self, batch, batch_idx):
         videos, targets = batch
         targets = targets.long()
@@ -159,9 +192,30 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         self.log("train_loss", loss, prog_bar=True, logger=True)
         return loss
 
+    def _unpack_batch(self, batch):
+        if len(batch) == 3:
+            return batch[0], batch[1].long(), batch[2]
+        return batch[0], batch[1].long(), None
+
+    def _append_video_clip_buffer(self, split: str, vids, logits, targets):
+        if not self._eval_multi_clip or vids is None:
+            return
+        n = logits.shape[0]
+        for i in range(n):
+            vid = vids[i]
+            if vid is None:
+                continue
+            if split == "val":
+                self._val_vid_ids.append(vid)
+                self._val_logits.append(logits[i].detach().cpu())
+                self._val_targets.append(targets[i].detach().cpu())
+            else:
+                self._test_vid_ids.append(vid)
+                self._test_logits.append(logits[i].detach().cpu())
+                self._test_targets.append(targets[i].detach().cpu())
+
     def validation_step(self, batch, batch_idx):
-        videos, targets = batch
-        targets = targets.long()
+        videos, targets, vids = self._unpack_batch(batch)
         logits = self.model(videos)
         loss = self._compute_loss(logits, targets)
         self.log("val_loss", loss, prog_bar=True, logger=True, on_epoch=True, on_step=False)
@@ -182,10 +236,10 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
             self.log("val_top3_acc", self.top3_acc, prog_bar=True, logger=True, on_epoch=True, on_step=False)
             self.log("val_aucroc", self.aucroc, prog_bar=True, logger=True, on_epoch=True, on_step=False)
             self.log("val_f1", self.f1, prog_bar=True, logger=True, on_epoch=True, on_step=False)
+        self._append_video_clip_buffer("val", vids, logits, targets)
 
     def test_step(self, batch, batch_idx):
-        videos, targets = batch
-        targets = targets.long()
+        videos, targets, vids = self._unpack_batch(batch)
         logits = self.model(videos)
         loss = self._compute_loss(logits, targets)
         self.log("test_loss", loss, logger=True, on_epoch=True, on_step=False)
@@ -206,6 +260,105 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
             self.log("test_top3_acc", self.top3_acc, logger=True, on_epoch=True, on_step=False)
             self.log("test_aucroc", self.aucroc, logger=True, on_epoch=True, on_step=False)
             self.log("test_f1", self.f1, logger=True, on_epoch=True, on_step=False)
+        self._append_video_clip_buffer("test", vids, logits, targets)
+
+    def on_validation_epoch_end(self):
+        if not self._eval_multi_clip or not self._val_vid_ids:
+            return
+        logits_np = [z.numpy() for z in self._val_logits]
+        targets_int = [int(t.item()) for t in self._val_targets]
+        m = video_level_classification_metrics(
+            self._val_vid_ids,
+            logits_np,
+            targets_int,
+            self.num_classes,
+        )
+        if not m:
+            return
+        sync = True
+        self.log(
+            "val_video_top1_acc",
+            m["video_top1"],
+            prog_bar=False,
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
+        )
+        self.log(
+            "val_video_top3_acc",
+            m["video_top3"],
+            prog_bar=False,
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
+        )
+        self.log(
+            "val_video_auroc",
+            m["video_auroc"],
+            prog_bar=False,
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
+        )
+        self.log(
+            "val_video_f1",
+            m["video_f1"],
+            prog_bar=False,
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
+        )
+
+    def on_test_epoch_end(self):
+        if not self._eval_multi_clip or not self._test_vid_ids:
+            return
+        logits_np = [z.numpy() for z in self._test_logits]
+        targets_int = [int(t.item()) for t in self._test_targets]
+        m = video_level_classification_metrics(
+            self._test_vid_ids,
+            logits_np,
+            targets_int,
+            self.num_classes,
+        )
+        if not m:
+            return
+        sync = True
+        self.log(
+            "test_video_top1_acc",
+            m["video_top1"],
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
+        )
+        self.log(
+            "test_video_top3_acc",
+            m["video_top3"],
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
+        )
+        self.log(
+            "test_video_auroc",
+            m["video_auroc"],
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
+        )
+        self.log(
+            "test_video_f1",
+            m["video_f1"],
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
+        )
 
     def configure_optimizers(self):
         lr = self.optimizer_config.get("lr", 1e-3)

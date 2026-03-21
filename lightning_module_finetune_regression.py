@@ -3,15 +3,79 @@ PyTorch Lightning Module for VideoMAE regression finetuning (continuous targets)
 
 Encoder + linear head via create_videomae_finetune_model (task_type='regression'),
 MSE or SmoothL1 loss, torchmetrics (MAE, RMSE, R2, Pearson), schedule-free optimizer.
+
+Optional eval.eval_protocol: multi_clip logs val_video_* / test_video_* (mean prediction per
+video_id) at epoch end. See lightning_module_finetune.py for DDP caveats.
 """
 
+from typing import List
+from collections import defaultdict
+
+import numpy as np
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 from torchmetrics import MeanAbsoluteError, MeanSquaredError, R2Score, PearsonCorrCoef
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from modeling.model_factory import create_videomae_finetune_model
 from optimizers.schedule_free_optimizer import create_schedule_free_optimizer
+
+
+def _video_level_regression_metrics(
+    video_ids: List,
+    preds_rows: List[torch.Tensor],
+    targets_rows: List[torch.Tensor],
+):
+    by_vid = defaultdict(list)
+    tgt_by = {}
+    for vid, pr, tg in zip(video_ids, preds_rows, targets_rows):
+        if vid is None:
+            continue
+        by_vid[vid].append(pr.detach().cpu().numpy())
+        tgt_by[vid] = tg.detach().cpu().numpy()
+
+    if not by_vid:
+        return {}
+
+    mean_preds = []
+    mean_tgts = []
+    for vid in by_vid:
+        stacked = np.stack(by_vid[vid], axis=0)
+        mean_preds.append(np.mean(stacked, axis=0))
+        mean_tgts.append(tgt_by[vid])
+
+    y_pred = np.stack(mean_preds, axis=0)
+    y_true = np.stack(mean_tgts, axis=0)
+    if y_pred.ndim == 1:
+        y_pred = y_pred.reshape(-1, 1)
+    if y_true.ndim == 1:
+        y_true = y_true.reshape(-1, 1)
+
+    mae = mean_absolute_error(y_true.flatten(), y_pred.flatten())
+    mse = mean_squared_error(y_true.flatten(), y_pred.flatten())
+    rmse = float(np.sqrt(mse))
+    r2 = r2_score(y_true.flatten(), y_pred.flatten())
+    if y_true.shape[0] < 2:
+        pearson = float("nan")
+    elif y_true.shape[1] == 1:
+        pearson = float(np.corrcoef(y_true.flatten(), y_pred.flatten())[0, 1])
+        if np.isnan(pearson):
+            pearson = 0.0
+    else:
+        corrs = []
+        for j in range(y_true.shape[1]):
+            c = np.corrcoef(y_true[:, j], y_pred[:, j])[0, 1]
+            if not np.isnan(c):
+                corrs.append(c)
+        pearson = float(np.mean(corrs)) if corrs else float("nan")
+
+    return {
+        "video_mae": float(mae),
+        "video_rmse": float(rmse),
+        "video_r2": float(r2),
+        "video_pearson": pearson,
+    }
 
 
 class VideoMAEFinetuneRegressionLightningModule(pl.LightningModule):
@@ -26,6 +90,10 @@ class VideoMAEFinetuneRegressionLightningModule(pl.LightningModule):
         self.training_config = config.get("training", {})
         self.optimizer_config = config.get("optimizer", {})
         self.loss_config = config.get("loss", {})
+        eval_cfg = config.get("eval") or {}
+        self._eval_multi_clip = (
+            (eval_cfg.get("eval_protocol") or "single_clip").lower() == "multi_clip"
+        )
 
         output_dim = int(self.data_config.get("output_dim", 1))
         self.output_dim = output_dim
@@ -76,6 +144,13 @@ class VideoMAEFinetuneRegressionLightningModule(pl.LightningModule):
         self.val_pearson = PearsonCorrCoef(num_outputs=output_dim)
         self.test_pearson = PearsonCorrCoef(num_outputs=output_dim)
 
+        self._val_vid_ids: List = []
+        self._val_preds: List[torch.Tensor] = []
+        self._val_targets: List[torch.Tensor] = []
+        self._test_vid_ids: List = []
+        self._test_preds: List[torch.Tensor] = []
+        self._test_targets: List[torch.Tensor] = []
+
     def forward(self, x):
         return self.model(x)
 
@@ -92,12 +167,52 @@ class VideoMAEFinetuneRegressionLightningModule(pl.LightningModule):
             )
         return pred, targets
 
+    def on_fit_start(self):
+        if self._eval_multi_clip and self.trainer.is_global_zero:
+            if "ddp" in str(type(self.trainer.strategy)).lower():
+                print(
+                    "eval_protocol=multi_clip: video-level regression metrics are per-rank from local "
+                    "clips; use single-GPU validation for global video-level scores."
+                )
+
     def on_before_optimizer_step(self, optimizer):
         actual_optimizer = optimizer
         if hasattr(optimizer, "optimizer"):
             actual_optimizer = optimizer.optimizer
         if hasattr(actual_optimizer, "train"):
             actual_optimizer.train()
+
+    def on_validation_epoch_start(self):
+        self._val_vid_ids.clear()
+        self._val_preds.clear()
+        self._val_targets.clear()
+
+    def on_test_epoch_start(self):
+        self._test_vid_ids.clear()
+        self._test_preds.clear()
+        self._test_targets.clear()
+
+    def _unpack_batch(self, batch):
+        if len(batch) == 3:
+            return batch[0], batch[1], batch[2]
+        return batch[0], batch[1], None
+
+    def _append_video_clip_buffer(self, split: str, vids, pred, targets):
+        if not self._eval_multi_clip or vids is None:
+            return
+        n = pred.shape[0]
+        for i in range(n):
+            vid = vids[i]
+            if vid is None:
+                continue
+            if split == "val":
+                self._val_vid_ids.append(vid)
+                self._val_preds.append(pred[i].detach().cpu())
+                self._val_targets.append(targets[i].detach().cpu())
+            else:
+                self._test_vid_ids.append(vid)
+                self._test_preds.append(pred[i].detach().cpu())
+                self._test_targets.append(targets[i].detach().cpu())
 
     def training_step(self, batch, batch_idx):
         videos, targets = batch
@@ -122,7 +237,7 @@ class VideoMAEFinetuneRegressionLightningModule(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        videos, targets = batch
+        videos, targets, vids = self._unpack_batch(batch)
         pred = self.model(videos)
         pred, targets = self._align_pred_target(pred, targets)
         loss = self.criterion(pred, targets)
@@ -144,9 +259,10 @@ class VideoMAEFinetuneRegressionLightningModule(pl.LightningModule):
             on_epoch=True,
             on_step=False,
         )
+        self._append_video_clip_buffer("val", vids, pred, targets)
 
     def test_step(self, batch, batch_idx):
-        videos, targets = batch
+        videos, targets, vids = self._unpack_batch(batch)
         pred = self.model(videos)
         pred, targets = self._align_pred_target(pred, targets)
         loss = self.criterion(pred, targets)
@@ -164,6 +280,99 @@ class VideoMAEFinetuneRegressionLightningModule(pl.LightningModule):
             logger=True,
             on_epoch=True,
             on_step=False,
+        )
+        self._append_video_clip_buffer("test", vids, pred, targets)
+
+    def on_validation_epoch_end(self):
+        if not self._eval_multi_clip or not self._val_vid_ids:
+            return
+        m = _video_level_regression_metrics(
+            self._val_vid_ids,
+            self._val_preds,
+            self._val_targets,
+        )
+        if not m:
+            return
+        sync = True
+        self.log(
+            "val_video_mae",
+            m["video_mae"],
+            prog_bar=False,
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
+        )
+        self.log(
+            "val_video_rmse",
+            m["video_rmse"],
+            prog_bar=False,
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
+        )
+        self.log(
+            "val_video_r2",
+            m["video_r2"],
+            prog_bar=False,
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
+        )
+        self.log(
+            "val_video_pearson",
+            m["video_pearson"],
+            prog_bar=False,
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
+        )
+
+    def on_test_epoch_end(self):
+        if not self._eval_multi_clip or not self._test_vid_ids:
+            return
+        m = _video_level_regression_metrics(
+            self._test_vid_ids,
+            self._test_preds,
+            self._test_targets,
+        )
+        if not m:
+            return
+        sync = True
+        self.log(
+            "test_video_mae",
+            m["video_mae"],
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
+        )
+        self.log(
+            "test_video_rmse",
+            m["video_rmse"],
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
+        )
+        self.log(
+            "test_video_r2",
+            m["video_r2"],
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
+        )
+        self.log(
+            "test_video_pearson",
+            m["video_pearson"],
+            logger=True,
+            on_epoch=True,
+            on_step=False,
+            sync_dist=sync,
         )
 
     def configure_optimizers(self):

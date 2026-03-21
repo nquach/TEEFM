@@ -41,6 +41,11 @@ def main():
 
     config = load_config(args.config)
     print(f"Loaded configuration from {args.config}")
+    ev = config.get("eval") or {}
+    print(
+        f"Eval: eval_protocol={ev.get('eval_protocol', 'single_clip')}, "
+        f"video_id_key={config.get('data', {}).get('video_id_key', 'video_id')}"
+    )
 
     seed = config.get('training', {}).get('seed', 0)
     pl.seed_everything(seed, workers=True)

@@ -6,10 +6,18 @@ and optional data.target_key for the label field in each sample.
 
 When val_optimized_dir and test_optimized_dir are not set, splits the training directory
 into train/val/test via litdata.train_test_split() and split_ratio.
+
+Eval (optional, see config `eval`):
+  - eval_protocol: single_clip (default) | multi_clip
+  - multi_clip uses deterministic UCF-style temporal x spatial crops on val/test only.
+  - data.video_id_key: stable string id per logical video (required when multi_clip).
+
+DDP note: video-level metrics aggregate clips only within each rank's val shard. For a
+globally correct video-level score under multi-GPU validation, use a single device or a
+strategy where each video's clips stay on one process; this module does not all_gather clips.
 """
 
 import os
-import random
 import torch
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
@@ -19,6 +27,7 @@ from litdata.streaming.cache import Dir
 from .optimized_video_classification_dataset import (
     OptimizedVideoClassificationDataset,
     ClassificationTransform,
+    build_finetune_video_tensor,
 )
 
 try:
@@ -38,10 +47,27 @@ def safe_makedir(path):
         os.makedirs(path)
 
 
+def _parse_eval_config(config):
+    """Returns dict with eval_protocol, multiclip flags, and crop/grid settings."""
+    eval_cfg = config.get("eval") or {}
+    protocol = (eval_cfg.get("eval_protocol") or "single_clip").lower()
+    if protocol not in ("single_clip", "multi_clip"):
+        raise ValueError(
+            f"eval.eval_protocol must be 'single_clip' or 'multi_clip', got {protocol!r}"
+        )
+    return {
+        "eval_protocol": protocol,
+        "test_num_segment": int(eval_cfg.get("test_num_segment", 1)),
+        "test_num_crop": int(eval_cfg.get("test_num_crop", 1)),
+        "short_side_size": int(eval_cfg.get("short_side_size", 256)),
+        "eval_center_crop_only": bool(eval_cfg.get("eval_center_crop_only", False)),
+    }
+
+
 class _ClassificationSplitWrapper(torch.utils.data.Dataset):
     """
     Wraps a StreamingDataset (e.g. one split from train_test_split) and applies
-    the same (video, target) processing as OptimizedVideoClassificationDataset.
+    the same processing as OptimizedVideoClassificationDataset (shared builder).
     """
 
     def __init__(
@@ -52,6 +78,14 @@ class _ClassificationSplitWrapper(torch.utils.data.Dataset):
         transform,
         task='classification',
         target_key='label',
+        return_video_id=False,
+        video_id_key='video_id',
+        eval_multiclip=False,
+        test_num_segment=1,
+        test_num_crop=1,
+        short_side_size=256,
+        input_size=224,
+        eval_center_crop_only=False,
     ):
         self.streaming_dataset = streaming_dataset
         self.frames_to_sample = frames_to_sample
@@ -59,41 +93,53 @@ class _ClassificationSplitWrapper(torch.utils.data.Dataset):
         self.transform = transform
         self.task = (task or 'classification').lower()
         self.target_key = target_key or 'label'
+        self.return_video_id = bool(return_video_id)
+        self.video_id_key = video_id_key or 'video_id'
+        self.eval_multiclip = bool(eval_multiclip)
+        self.test_num_segment = int(test_num_segment)
+        self.test_num_crop = int(test_num_crop)
+        self.short_side_size = int(short_side_size)
+        self.input_size = int(input_size)
+        self.eval_center_crop_only = bool(eval_center_crop_only)
 
     def __len__(self):
-        return len(self.streaming_dataset)
+        n = len(self.streaming_dataset)
+        if self.eval_multiclip and not self.eval_center_crop_only:
+            return n * self.test_num_segment * self.test_num_crop
+        return n
 
     def __getitem__(self, idx):
-        data = self.streaming_dataset[idx]
-        video = data['video']
-        if self.target_key not in data:
-            raise KeyError(
-                f"Missing key {self.target_key!r} in sample; keys={list(data.keys())}"
-            )
-        raw_target = data[self.target_key]
-        if self.task == 'regression':
-            target = torch.as_tensor(raw_target, dtype=torch.float32).reshape(-1)
+        if self.eval_multiclip and not self.eval_center_crop_only:
+            per = self.test_num_segment * self.test_num_crop
+            row = idx // per
+            rem = idx % per
+            chunk_nb = rem // self.test_num_crop
+            split_nb = rem % self.test_num_crop
         else:
-            label = raw_target
-            if hasattr(label, 'item'):
-                label = int(label.item())
-            else:
-                label = int(label)
-            target = label
-        num_frames = video.shape[0]
-        max_start = max(0, num_frames - self.frames_to_sample)
-        start_frame = random.randint(0, max_start) if max_start > 0 else 0
-        sampled_frames = video[start_frame : start_frame + self.frames_to_sample]
-        video_tensor = sampled_frames[:: self.temporal_stride].float()
-        max_val = video_tensor.max().item() if video_tensor.numel() > 0 else 0.0
-        if max_val > 1.0:
-            video_tensor = video_tensor / 255.0
-        if video_tensor.dim() == 4 and video_tensor.shape[-1] == 3:
-            video_tensor = video_tensor.permute(0, 3, 1, 2)
-        video_tensor = video_tensor.permute(1, 0, 2, 3)
-        if self.transform is not None:
-            video_tensor = self.transform(video_tensor)
-        return video_tensor, target
+            row = idx
+            chunk_nb = 0
+            split_nb = 0
+
+        data = self.streaming_dataset[row]
+        return build_finetune_video_tensor(
+            data,
+            frames_to_sample=self.frames_to_sample,
+            temporal_stride=self.temporal_stride,
+            transform=self.transform,
+            task=self.task,
+            target_key=self.target_key,
+            video_id_key=self.video_id_key,
+            return_video_id=self.return_video_id,
+            require_video_id=self.eval_multiclip,
+            eval_multiclip=self.eval_multiclip,
+            chunk_nb=chunk_nb,
+            split_nb=split_nb,
+            test_num_segment=self.test_num_segment,
+            test_num_crop=self.test_num_crop,
+            short_side_size=self.short_side_size,
+            input_size=self.input_size,
+            eval_center_crop_only=self.eval_center_crop_only,
+        )
 
 
 class FinetuningDataModule(pl.LightningDataModule):
@@ -114,6 +160,8 @@ class FinetuningDataModule(pl.LightningDataModule):
         self.test_dataset = None
         self.train_transform = None
         self.val_transform = None
+        self._eval_parsed = _parse_eval_config(config)
+        self._video_id_key = self.data_config.get('video_id_key', 'video_id')
 
     def setup(self, stage=None):
         normalize_mean = self.data_config.get('normalize_mean', [0.117, 0.114, 0.113])
@@ -160,6 +208,20 @@ class FinetuningDataModule(pl.LightningDataModule):
         task = self.data_config.get('task', 'classification')
         target_key = self.data_config.get('target_key', 'label')
         use_explicit_splits = val_dir is not None and test_dir is not None
+
+        ev = self._eval_parsed
+        val_multiclip = ev["eval_protocol"] == "multi_clip"
+        val_ds_kwargs = dict(
+            return_video_id=True,
+            video_id_key=self._video_id_key,
+            eval_multiclip=val_multiclip,
+            test_num_segment=ev["test_num_segment"],
+            test_num_crop=ev["test_num_crop"],
+            short_side_size=ev["short_side_size"],
+            input_size=input_size,
+            eval_center_crop_only=ev["eval_center_crop_only"],
+        )
+
         if stage == 'fit' or stage is None:
             if use_explicit_splits:
                 self.train_dataset = OptimizedVideoClassificationDataset(
@@ -173,6 +235,7 @@ class FinetuningDataModule(pl.LightningDataModule):
                     storage_options=storage_options,
                     task=task,
                     target_key=target_key,
+                    return_video_id=False,
                 )
                 self.val_dataset = OptimizedVideoClassificationDataset(
                     data_dir=val_dir,
@@ -185,6 +248,7 @@ class FinetuningDataModule(pl.LightningDataModule):
                     storage_options=storage_options,
                     task=task,
                     target_key=target_key,
+                    **val_ds_kwargs,
                 )
                 print(f"Train dataset from {train_dir} (len={len(self.train_dataset)})")
                 print(f"Val dataset from {val_dir} (len={len(self.val_dataset)})")
@@ -206,6 +270,7 @@ class FinetuningDataModule(pl.LightningDataModule):
                     self.train_transform,
                     task=task,
                     target_key=target_key,
+                    return_video_id=False,
                 )
                 self.val_dataset = _ClassificationSplitWrapper(
                     val_split,
@@ -214,6 +279,7 @@ class FinetuningDataModule(pl.LightningDataModule):
                     self.val_transform,
                     task=task,
                     target_key=target_key,
+                    **val_ds_kwargs,
                 )
                 self.test_dataset = _ClassificationSplitWrapper(
                     test_split,
@@ -222,6 +288,7 @@ class FinetuningDataModule(pl.LightningDataModule):
                     self.val_transform,
                     task=task,
                     target_key=target_key,
+                    **val_ds_kwargs,
                 )
                 print(f"Split dataset from {train_dir} with ratio {split_ratio}")
                 print(f"Train len={len(self.train_dataset)}, Val len={len(self.val_dataset)}, Test len={len(self.test_dataset)}")
@@ -238,6 +305,7 @@ class FinetuningDataModule(pl.LightningDataModule):
                     storage_options=storage_options,
                     task=task,
                     target_key=target_key,
+                    **val_ds_kwargs,
                 )
                 print(f"Test dataset from {test_dir} (len={len(self.test_dataset)})")
 

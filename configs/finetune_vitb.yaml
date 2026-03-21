@@ -4,6 +4,10 @@
 
 # Data: single train dir, or explicit val/test dirs. When val/test dirs are not set,
 # litdata.train_test_split() is used with split_ratio to create train/val/test.
+#
+# LitData samples: require "video" + target under target_key (default "label").
+# For eval.eval_protocol: multi_clip, each sample must include stable string data.video_id_key
+# (default "video_id") so val/test clips aggregate to one prediction per logical video.
 data:
   train_optimized_dir: 's3://tee-2023-2024/labeled-datasets/opt_RVIO_RVQual'
   val_optimized_dir: null   # optional; if null (and test null), use train_test_split
@@ -19,6 +23,19 @@ data:
   normalize_std: [0.208, 0.204, 0.203]
   max_cache_size: '100GB'
   cloud_type: 's3_public'
+  # video_id_key: 'video_id'   # LitData field used when eval.eval_protocol is multi_clip
+
+# Val/test evaluation protocol (train unchanged).
+# single_clip: one random temporal window per row (default).
+# multi_clip: deterministic UCF-style temporal x spatial grid; expands val/test dataset length;
+#   Lightning logs val_video_* / test_video_* (mean softmax per video). DDP: metrics are per-rank
+#   unless you validate on one device (clips for a video may be split across ranks).
+eval:
+  eval_protocol: single_clip   # single_clip | multi_clip
+  test_num_segment: 2
+  test_num_crop: 3
+  short_side_size: 256
+  eval_center_crop_only: false  # if true: one center clip (smoke test), no grid expansion
 
 # Model: encoder-only classification; pretrained_path = checkpoint from pretraining (encoder+decoder).
 model:
