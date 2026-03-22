@@ -250,8 +250,22 @@ class FinetuningDataModule(pl.LightningDataModule):
                     target_key=target_key,
                     **val_ds_kwargs,
                 )
+                self.test_dataset = OptimizedVideoClassificationDataset(
+                    data_dir=test_dir,
+                    frames_to_sample=frames_to_sample,
+                    temporal_stride=temporal_stride,
+                    transform=self.val_transform,
+                    cache_dir=cache_dir,
+                    max_cache_size=max_cache,
+                    drop_last=False,
+                    storage_options=storage_options,
+                    task=task,
+                    target_key=target_key,
+                    **val_ds_kwargs,
+                )
                 print(f"Train dataset from {train_dir} (len={len(self.train_dataset)})")
                 print(f"Val dataset from {val_dir} (len={len(self.val_dataset)})")
+                print(f"Test dataset from {test_dir} (len={len(self.test_dataset)})")
             else:
                 base_ds = StreamingDataset(
                     input_dir=Dir(path=cache_dir, url=train_dir),

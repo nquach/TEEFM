@@ -9,21 +9,22 @@
 # For eval.eval_protocol: multi_clip, each sample must include stable string data.video_id_key
 # (default "video_id") so val/test clips aggregate to one prediction per logical video.
 data:
-  train_optimized_dir: 's3://tee-2023-2024/labeled-datasets/opt_RVIO_RVQual'
+  train_optimized_dir: 's3://tee-2023-2024/labeled-datasets/opt-KRS-13views'
   val_optimized_dir: null   # optional; if null (and test null), use train_test_split
   test_optimized_dir: null
   split_ratio: [0.8, 0.1, 0.1]  # [train, val, test]; used only when val/test dirs are null
   # Optional class-imbalance weighting for CE loss.
   # If enabled, provide counts for every class id in [0, num_classes-1].
-  use_class_weights: true
-  class_distribution: {0: 238, 1: 38, 2: 118, 3: 1, 4: 2416, 5: 35}  # e.g. {0: 238, 1: 38, 2: 118, 3: 1, 4: 2416, 5: 35}
+  use_class_weights: false
+  class_distribution: null  # e.g. {0: 238, 1: 38, 2: 118, 3: 1, 4: 2416, 5: 35}
   cache_dir: "./output/cache_finetune"
   num_classes: 6
   normalize_mean: [0.117, 0.114, 0.113]
   normalize_std: [0.208, 0.204, 0.203]
   max_cache_size: '100GB'
   cloud_type: 's3_public'
-  # video_id_key: 'video_id'   # LitData field used when eval.eval_protocol is multi_clip
+  video_id_key: filename   # LitData field used when eval.eval_protocol is multi_clip
+  run_test_after_fit: true  # after fit, run trainer.test() on test split (default true); set false to skip
 
 # Val/test evaluation protocol (train unchanged).
 # single_clip: one random temporal window per row (default).
@@ -31,7 +32,7 @@ data:
 #   Lightning logs val_video_* / test_video_* (mean softmax per video). DDP: metrics are per-rank
 #   unless you validate on one device (clips for a video may be split across ranks).
 eval:
-  eval_protocol: single_clip   # single_clip | multi_clip
+  eval_protocol: multi_clip   # single_clip | multi_clip
   test_num_segment: 2
   test_num_crop: 3
   short_side_size: 256
@@ -61,7 +62,7 @@ model:
 # Training
 training:
   batch_size: 32
-  max_epochs: 30
+  max_epochs: 300
   num_workers: 10
   pin_memory: true
   seed: 0
@@ -90,7 +91,7 @@ checkpoint:
   save_last: true
   strict_top_k: false
   monitor: "val_loss"
-  mode: "max"
+  mode: "min"
   save_ckpt_freq: null
 
 # Logging

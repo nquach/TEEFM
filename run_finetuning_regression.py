@@ -126,6 +126,22 @@ def main():
     if checkpoint_callback is not None:
         print(f"Best model checkpoint: {checkpoint_callback.best_model_path}")
 
+    run_test = config.get("data", {}).get("run_test_after_fit", True)
+    if run_test and data_module.test_dataset is not None:
+        test_ckpt = None
+        if checkpoint_callback is not None:
+            bp = getattr(checkpoint_callback, "best_model_path", None)
+            if bp and os.path.isfile(bp):
+                test_ckpt = bp
+            else:
+                lp = getattr(checkpoint_callback, "last_model_path", None)
+                if lp and os.path.isfile(lp):
+                    test_ckpt = lp
+        print("Running test step...")
+        trainer.test(model, datamodule=data_module, ckpt_path=test_ckpt)
+    elif run_test and data_module.test_dataset is None:
+        print("Skipping test: no test_dataset (set data.test_optimized_dir with val for explicit splits, or use train_test_split).")
+
 
 if __name__ == '__main__':
     main()
