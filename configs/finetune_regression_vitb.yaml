@@ -73,6 +73,7 @@ optimizer:
   betas: [0.9, 0.95]
   eps: 1e-8
   warmup_steps: 0
+  # layer_decay: 0.75   # < 1.0 enables ViT layer-wise LR decay (omit or 1.0 to disable)
 
 checkpoint:
   enable: true

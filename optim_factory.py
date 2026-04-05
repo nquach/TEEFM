@@ -1,3 +1,5 @@
+from typing import List, Optional, Union
+
 import torch
 from torch import optim as optim
 
@@ -173,3 +175,52 @@ def create_optimizer(args, model, get_num_layer=None, get_layer_scale=None, filt
             optimizer = Lookahead(optimizer)
 
     return optimizer
+
+
+def build_layer_decay_param_groups(
+    model,
+    base_lr: float,
+    weight_decay: float,
+    layer_decay: float,
+    skip_list: Optional[Union[tuple, list, set, frozenset]] = None,
+) -> Optional[List[dict]]:
+    """
+    Build optimizer param groups with per-layer LR scales for schedule-free optimizers.
+
+    Uses the same decay law as run_class_finetuning (LayerDecayValueAssigner).
+    Each group has 'params', 'lr' (= base_lr * scale), and 'weight_decay'.
+    Returns None if layer_decay >= 1.0 (caller should use a single-group optimizer).
+    """
+    if layer_decay >= 1.0:
+        return None
+    if not hasattr(model, "get_num_layers"):
+        raise ValueError(
+            "optimizer.layer_decay < 1 requires model.get_num_layers() (ViT finetune)."
+        )
+    num_layers = model.get_num_layers()
+    scales = [layer_decay ** (num_layers + 1 - i) for i in range(num_layers + 2)]
+    assigner = LayerDecayValueAssigner(scales)
+    if skip_list is None:
+        skip_list = model.no_weight_decay() if hasattr(model, "no_weight_decay") else ()
+    raw_groups = get_parameter_groups(
+        model, weight_decay, skip_list, assigner.get_layer_id, assigner.get_scale
+    )
+    out = []
+    lrs = []
+    for g in raw_groups:
+        scale = float(g["lr_scale"])
+        lr = base_lr * scale
+        lrs.append(lr)
+        out.append(
+            {
+                "params": g["params"],
+                "weight_decay": g["weight_decay"],
+                "lr": lr,
+            }
+        )
+    if out:
+        print(
+            f"Layer-wise LR decay (layer_decay={layer_decay}): {len(out)} param groups, "
+            f"lr min={min(lrs):.2e} max={max(lrs):.2e} (base_lr={base_lr:.2e})"
+        )
+    return out

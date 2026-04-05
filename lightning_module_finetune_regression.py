@@ -19,6 +19,7 @@ from torchmetrics import MeanAbsoluteError, MeanSquaredError, R2Score, PearsonCo
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from modeling.model_factory import create_videomae_finetune_model
+from optim_factory import build_layer_decay_param_groups
 from optimizers.schedule_free_optimizer import create_schedule_free_optimizer
 
 
@@ -401,13 +402,33 @@ class VideoMAEFinetuneRegressionLightningModule(pl.LightningModule):
             betas = tuple(float(b) for b in betas)
         else:
             betas = (0.9, 0.95)
+        layer_decay = self.optimizer_config.get("layer_decay", 1.0)
+        if isinstance(layer_decay, (list, tuple)):
+            layer_decay = float(layer_decay[0]) if layer_decay else 1.0
+        else:
+            layer_decay = float(layer_decay)
+        skip = (
+            self.model.no_weight_decay()
+            if hasattr(self.model, "no_weight_decay")
+            else ()
+        )
+        param_groups = build_layer_decay_param_groups(
+            self.model, lr, weight_decay, layer_decay, skip_list=skip
+        )
+        opt_type = self.optimizer_config.get("type", "radam")
+        if param_groups is not None and str(opt_type).lower() == "adamw" and warmup_steps > 0:
+            print(
+                "Note: AdamWScheduleFree uses warmup_steps with layer-wise param groups; "
+                "see schedulefree behavior if LR looks unexpected."
+            )
         optimizer = create_schedule_free_optimizer(
-            self.model,
-            optimizer_type=self.optimizer_config.get("type", "radam"),
+            model=None if param_groups is not None else self.model,
+            optimizer_type=opt_type,
             lr=lr,
             weight_decay=weight_decay,
             betas=betas,
             eps=eps,
             warmup_steps=warmup_steps,
+            param_groups=param_groups,
         )
         return optimizer
