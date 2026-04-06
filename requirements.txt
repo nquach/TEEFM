@@ -16,6 +16,7 @@ av
 litdata
 optuna
 plotly
+matplotlib
 kaleido
 zstd
 torchmetrics

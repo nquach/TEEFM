@@ -1,4 +1,6 @@
 from functools import partial
+from typing import List, Optional
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -76,7 +78,7 @@ class Attention(nn.Module):
         self.proj = nn.Linear(all_head_dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
-    def forward(self, x):
+    def forward(self, x, attn_weights_out: Optional[List[torch.Tensor]] = None):
         B, N, C = x.shape
         qkv_bias = None
         if self.q_bias is not None:
@@ -89,8 +91,9 @@ class Attention(nn.Module):
         q = q * self.scale
         attn = (q @ k.transpose(-2, -1))
 
-        
         attn = attn.softmax(dim=-1)
+        if attn_weights_out is not None:
+            attn_weights_out.append(attn.detach().clone())
         attn = self.attn_drop(attn)
 
         x = (attn @ v).transpose(1, 2).reshape(B, N, -1)
@@ -121,12 +124,12 @@ class Block(nn.Module):
         else:
             self.gamma_1, self.gamma_2 = None, None
 
-    def forward(self, x):
+    def forward(self, x, attn_weights_out: Optional[List[torch.Tensor]] = None):
         if self.gamma_1 is None:
-            x = x + self.drop_path(self.attn(self.norm1(x)))
+            x = x + self.drop_path(self.attn(self.norm1(x), attn_weights_out=attn_weights_out))
             x = x + self.drop_path(self.mlp(self.norm2(x)))
         else:
-            x = x + self.drop_path(self.gamma_1 * self.attn(self.norm1(x)))
+            x = x + self.drop_path(self.gamma_1 * self.attn(self.norm1(x), attn_weights_out=attn_weights_out))
             x = x + self.drop_path(self.gamma_2 * self.mlp(self.norm2(x)))
         return x
 
@@ -263,7 +266,7 @@ class VisionTransformer(nn.Module):
         self.num_classes = num_classes
         self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
-    def forward_features(self, x):
+    def forward_features(self, x, attn_weights_out: Optional[List[torch.Tensor]] = None):
         N, _, T, _, _ = x.shape
         x = self.patch_embed(x)
         if self.mcm:
@@ -281,7 +284,7 @@ class VisionTransformer(nn.Module):
                 x = checkpoint.checkpoint(blk, x, use_reentrant=False)
         else:
             for blk in self.blocks:
-                x = blk(x)
+                x = blk(x, attn_weights_out=attn_weights_out)
 
         x = self.norm(x)
         if self.fc_norm is not None:
