@@ -9,7 +9,8 @@
 # For eval.eval_protocol: multi_clip, each sample must include stable string data.video_id_key
 # (default "video_id") so val/test clips aggregate to one prediction per logical video.
 data:
-  train_optimized_dir: 's3://tee-2023-2024/labeled-datasets/opt-KRS-13views'
+  #train_optimized_dir: 's3://tee-2023-2024/labeled-datasets/opt-KRS-13views'
+  train_optimized_dir: 's3://tee-2023-2024/labeled-datasets/opt-5k-2D'
   val_optimized_dir: null   # optional; if null (and test null), use train_test_split
   test_optimized_dir: null
   split_ratio: [0.8, 0.1, 0.1]  # [train, val, test]; used only when val/test dirs are null
@@ -18,7 +19,7 @@ data:
   use_class_weights: false
   class_distribution: null  # e.g. {0: 238, 1: 38, 2: 118, 3: 1, 4: 2416, 5: 35}
   cache_dir: "./output/cache_finetune"
-  num_classes: 13
+  num_classes: 62
   normalize_mean: [0.117, 0.114, 0.113]
   normalize_std: [0.208, 0.204, 0.203]
   max_cache_size: '100GB'
@@ -56,13 +57,13 @@ model:
   init_scale: 0.001
   mcm: false
   mcm_ratio: 0.4
-  crop_scale: [0.75, 1.0]
+  crop_scale: [0.5, 1.0]
   crop_aspect_ratio: [0.8, 1.2]
 
 # Training
 training:
   batch_size: 32
-  max_epochs: 300
+  max_epochs: 75
   num_workers: 10
   pin_memory: true
   seed: 0
@@ -78,10 +79,10 @@ optimizer:
   type: "radam"
   lr: 1e-3
   weight_decay: 0.05
-  betas: [0.9, 0.95]
+  betas: [0.9, 0.99]
   eps: 1e-8
   warmup_steps: 0
-  # layer_decay: 0.75   # < 1.0 enables ViT layer-wise LR decay (omit or 1.0 to disable)
+  layer_decay: 0.75   # < 1.0 enables ViT layer-wise LR decay (omit or 1.0 to disable)
 
 # Checkpointing
 checkpoint:
@@ -91,8 +92,8 @@ checkpoint:
   save_top_k: 3
   save_last: true
   strict_top_k: false
-  monitor: "val_loss"
-  mode: "min"
+  monitor: "val_f1"
+  mode: "max"
   save_ckpt_freq: null
 
 # Logging
