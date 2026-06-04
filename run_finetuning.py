@@ -6,8 +6,11 @@ optional train_test_split), encoder-only classification model from pretrained ch
 schedule-free optimizer, and runs Trainer. Use --config and optional --resume.
 """
 
+import math
 import os
 import warnings
+from typing import Dict, Optional
+
 import yaml
 import torch
 import pytorch_lightning as pl
@@ -26,6 +29,78 @@ def load_config(config_path):
         raise FileNotFoundError(f"Configuration file not found: {config_path}")
     with open(config_path, 'r') as f:
         return yaml.safe_load(f)
+
+
+def _resolve_best_checkpoint(checkpoint_callback) -> Optional[str]:
+    if checkpoint_callback is None:
+        return None
+    best_path = getattr(checkpoint_callback, "best_model_path", None)
+    if best_path and os.path.isfile(best_path):
+        return best_path
+    last_path = getattr(checkpoint_callback, "last_model_path", None)
+    if last_path and os.path.isfile(last_path):
+        return last_path
+    return None
+
+
+def _format_auroc_value(value) -> str:
+    if value is None:
+        return "nan"
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "nan"
+    if math.isnan(v):
+        return "nan"
+    return f"{v:.4f}"
+
+
+def _print_per_class_auroc_table(
+    title: str,
+    metrics: Dict,
+    key_prefix: str,
+    num_classes: int,
+    global_rank: int = 0,
+):
+    if global_rank != 0:
+        return
+    macro_key = f"{key_prefix}_aucroc"
+    macro_val = metrics.get(macro_key)
+    print(f"\n{title}", end="")
+    if macro_val is not None:
+        print(f" — macro AUROC: {_format_auroc_value(macro_val)}")
+    else:
+        print()
+    print("Class | AUROC")
+    print("------|------")
+    for class_id in range(num_classes):
+        class_key = f"{key_prefix}_aucroc_class_{class_id}"
+        print(f"{class_id:5d} | {_format_auroc_value(metrics.get(class_key))}")
+
+
+def _print_eval_auroc_tables(
+    split_label: str,
+    metrics: Dict,
+    key_prefix: str,
+    num_classes: int,
+    eval_multi_clip: bool,
+    global_rank: int = 0,
+):
+    _print_per_class_auroc_table(
+        f"{split_label} (clip-level)",
+        metrics,
+        key_prefix,
+        num_classes,
+        global_rank=global_rank,
+    )
+    if eval_multi_clip:
+        _print_per_class_auroc_table(
+            f"{split_label} (video-level)",
+            metrics,
+            f"{key_prefix}_video",
+            num_classes,
+            global_rank=global_rank,
+        )
 
 
 def main():
@@ -117,23 +192,54 @@ def main():
     print("Starting finetuning...")
     trainer.fit(model, data_module, ckpt_path=args.resume)
     print("Finetuning completed.")
-    if checkpoint_callback is not None:
-        print(f"Best model checkpoint: {checkpoint_callback.best_model_path}")
+
+    best_ckpt = _resolve_best_checkpoint(checkpoint_callback)
+    if trainer.global_rank == 0:
+        if best_ckpt:
+            print(f"Best model checkpoint: {best_ckpt}")
+        elif not checkpoint_enabled:
+            print("Checkpointing disabled; per-class AUROC tables require a saved checkpoint.")
+        else:
+            print("No checkpoint file found; skipping per-class AUROC tables.")
+
+    num_classes = config.get("data", {}).get("num_classes", 101)
+    eval_multi_clip = (ev.get("eval_protocol") or "single_clip").lower() == "multi_clip"
+
+    if best_ckpt and data_module.val_dataset is not None:
+        if trainer.global_rank == 0:
+            print("Running validation on best checkpoint for per-class AUROC...")
+        val_results = trainer.validate(model, datamodule=data_module, ckpt_path=best_ckpt)
+        val_metrics = val_results[0] if val_results else {}
+        _print_eval_auroc_tables(
+            "Validation",
+            val_metrics,
+            "val",
+            num_classes,
+            eval_multi_clip,
+            global_rank=trainer.global_rank,
+        )
+    elif best_ckpt and data_module.val_dataset is None and trainer.global_rank == 0:
+        print("Skipping validation AUROC tables: no val_dataset.")
 
     run_test = config.get("data", {}).get("run_test_after_fit", True)
     if run_test and data_module.test_dataset is not None:
-        test_ckpt = None
-        if checkpoint_callback is not None:
-            bp = getattr(checkpoint_callback, "best_model_path", None)
-            if bp and os.path.isfile(bp):
-                test_ckpt = bp
-            else:
-                lp = getattr(checkpoint_callback, "last_model_path", None)
-                if lp and os.path.isfile(lp):
-                    test_ckpt = lp
-        print("Running test step...")
-        trainer.test(model, datamodule=data_module, ckpt_path=test_ckpt)
-    elif run_test and data_module.test_dataset is None:
+        if best_ckpt is None:
+            if trainer.global_rank == 0:
+                print("Skipping test: no checkpoint available for evaluation.")
+        else:
+            if trainer.global_rank == 0:
+                print("Running test step on best checkpoint...")
+            test_results = trainer.test(model, datamodule=data_module, ckpt_path=best_ckpt)
+            test_metrics = test_results[0] if test_results else {}
+            _print_eval_auroc_tables(
+                "Test",
+                test_metrics,
+                "test",
+                num_classes,
+                eval_multi_clip,
+                global_rank=trainer.global_rank,
+            )
+    elif run_test and data_module.test_dataset is None and trainer.global_rank == 0:
         print("Skipping test: no test_dataset (set data.test_optimized_dir with val for explicit splits, or use train_test_split).")
 
 
