@@ -53,3 +53,19 @@ def test_two_videos_independent():
     targets = [0, 0, 1, 1]
     m = video_level_classification_metrics(ids, logits, targets, num_classes=2)
     assert m["video_top1"] == 1.0
+    assert "video_auroc_per_class" in m
+    assert len(m["video_auroc_per_class"]) == 2
+
+
+def test_video_auroc_per_class_multiclass():
+    ids = ["a", "a", "b", "b"]
+    logits = [
+        np.array([2.0, 0.0, 0.0], dtype=np.float32),
+        np.array([1.5, 0.0, 0.0], dtype=np.float32),
+        np.array([0.0, 2.0, 0.0], dtype=np.float32),
+        np.array([0.0, 1.5, 0.0], dtype=np.float32),
+    ]
+    targets = [0, 0, 1, 1]
+    m = video_level_classification_metrics(ids, logits, targets, num_classes=3)
+    assert len(m["video_auroc_per_class"]) == 3
+    assert all(isinstance(x, float) for x in m["video_auroc_per_class"])

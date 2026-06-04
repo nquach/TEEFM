@@ -16,7 +16,8 @@ from typing import Dict, List, Optional
 import torch
 import pytorch_lightning as pl
 import torch.nn.functional as F
-from torchmetrics import Accuracy, AUROC, F1Score
+from torchmetrics import Accuracy, F1Score
+from torchmetrics.classification import MulticlassAUROC
 
 from metrics.video_eval_metrics import video_level_classification_metrics
 from modeling.model_factory import create_videomae_finetune_model
@@ -73,7 +74,6 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         self.register_buffer("class_weights", class_weights, persistent=True)
         if num_classes == 2:
             self.acc = Accuracy(task="binary")
-            self.aucroc = AUROC(task="binary")
             self.f1 = F1Score(task="binary")
         else:
             self.top1_acc = Accuracy(
@@ -82,14 +82,13 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
             self.top3_acc = Accuracy(
                 task="multiclass", num_classes=num_classes, top_k=3
             )
-            self.aucroc = AUROC(
-                task="multiclass", num_classes=num_classes, average="macro"
-            )
             self.f1 = F1Score(
                 task="multiclass",
                 num_classes=num_classes,
                 average="macro",
             )
+        self.aucroc_macro = MulticlassAUROC(num_classes=num_classes, average="macro")
+        self.aucroc_per_class = MulticlassAUROC(num_classes=num_classes, average=None)
         self._val_vid_ids: List = []
         self._val_logits: List[torch.Tensor] = []
         self._val_targets: List[torch.Tensor] = []
@@ -198,6 +197,33 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
             return batch[0], batch[1].long(), batch[2]
         return batch[0], batch[1].long(), None
 
+    def _log_per_class_auroc(self, split: str):
+        scores = self.aucroc_per_class.compute()
+        for i in range(scores.shape[0]):
+            score = scores[i]
+            val = float("nan") if torch.isnan(score) else float(score.item())
+            self.log(
+                f"{split}_aucroc_class_{i}",
+                val,
+                logger=True,
+                on_epoch=True,
+                on_step=False,
+                sync_dist=True,
+            )
+        self.aucroc_per_class.reset()
+
+    def _log_video_per_class_auroc(self, split: str, per_class_scores: List[float]):
+        for i, score in enumerate(per_class_scores):
+            val = float(score) if score == score else float("nan")
+            self.log(
+                f"{split}_video_auroc_class_{i}",
+                val,
+                logger=True,
+                on_epoch=True,
+                on_step=False,
+                sync_dist=True,
+            )
+
     def _append_video_clip_buffer(self, split: str, vids, logits, targets):
         if not self._eval_multi_clip or vids is None:
             return
@@ -221,22 +247,21 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         loss = self._compute_loss(logits, targets)
         self.log("val_loss", loss, prog_bar=True, logger=True, on_epoch=True, on_step=False)
         num_classes = self.num_classes
+        self.aucroc_macro(logits, targets)
+        self.aucroc_per_class(logits, targets)
         if num_classes == 2:
             self.acc(logits, targets)
-            self.aucroc(logits, targets)
             self.f1(logits, targets)
             self.log("val_top1_acc", self.acc, prog_bar=True, logger=True, on_epoch=True, on_step=False)
-            self.log("val_aucroc", self.aucroc, prog_bar=True, logger=True, on_epoch=True, on_step=False)
             self.log("val_f1", self.f1, prog_bar=True, logger=True, on_epoch=True, on_step=False)
         else:
             self.top1_acc(logits, targets)
             self.top3_acc(logits, targets)
-            self.aucroc(logits, targets)
             self.f1(logits, targets)
             self.log("val_top1_acc", self.top1_acc, prog_bar=True, logger=True, on_epoch=True, on_step=False)
             self.log("val_top3_acc", self.top3_acc, prog_bar=True, logger=True, on_epoch=True, on_step=False)
-            self.log("val_aucroc", self.aucroc, prog_bar=True, logger=True, on_epoch=True, on_step=False)
             self.log("val_f1", self.f1, prog_bar=True, logger=True, on_epoch=True, on_step=False)
+        self.log("val_aucroc", self.aucroc_macro, prog_bar=True, logger=True, on_epoch=True, on_step=False)
         self._append_video_clip_buffer("val", vids, logits, targets)
 
     def test_step(self, batch, batch_idx):
@@ -245,25 +270,25 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         loss = self._compute_loss(logits, targets)
         self.log("test_loss", loss, logger=True, on_epoch=True, on_step=False)
         num_classes = self.num_classes
+        self.aucroc_macro(logits, targets)
+        self.aucroc_per_class(logits, targets)
         if num_classes == 2:
             self.acc(logits, targets)
-            self.aucroc(logits, targets)
             self.f1(logits, targets)
             self.log("test_top1_acc", self.acc, logger=True, on_epoch=True, on_step=False)
-            self.log("test_aucroc", self.aucroc, logger=True, on_epoch=True, on_step=False)
             self.log("test_f1", self.f1, logger=True, on_epoch=True, on_step=False)
         else:
             self.top1_acc(logits, targets)
             self.top3_acc(logits, targets)
-            self.aucroc(logits, targets)
             self.f1(logits, targets)
             self.log("test_top1_acc", self.top1_acc, logger=True, on_epoch=True, on_step=False)
             self.log("test_top3_acc", self.top3_acc, logger=True, on_epoch=True, on_step=False)
-            self.log("test_aucroc", self.aucroc, logger=True, on_epoch=True, on_step=False)
             self.log("test_f1", self.f1, logger=True, on_epoch=True, on_step=False)
+        self.log("test_aucroc", self.aucroc_macro, logger=True, on_epoch=True, on_step=False)
         self._append_video_clip_buffer("test", vids, logits, targets)
 
     def on_validation_epoch_end(self):
+        self._log_per_class_auroc("val")
         if not self._eval_multi_clip or not self._val_vid_ids:
             return
         logits_np = [z.numpy() for z in self._val_logits]
@@ -313,8 +338,11 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
             on_step=False,
             sync_dist=sync,
         )
+        if "video_auroc_per_class" in m:
+            self._log_video_per_class_auroc("val", m["video_auroc_per_class"])
 
     def on_test_epoch_end(self):
+        self._log_per_class_auroc("test")
         if not self._eval_multi_clip or not self._test_vid_ids:
             return
         logits_np = [z.numpy() for z in self._test_logits]
@@ -360,6 +388,8 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
             on_step=False,
             sync_dist=sync,
         )
+        if "video_auroc_per_class" in m:
+            self._log_video_per_class_auroc("test", m["video_auroc_per_class"])
 
     def configure_optimizers(self):
         lr = self.optimizer_config.get("lr", 1e-3)

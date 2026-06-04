@@ -5,7 +5,7 @@ Same spirit as engine_for_finetuning.compute_video. NumPy-only for fast tests; L
 converts tensors before calling.
 """
 
-from typing import Dict, List
+from typing import Any, Dict, List
 from collections import defaultdict
 
 import numpy as np
@@ -24,7 +24,7 @@ def video_level_classification_metrics(
     logits_rows: List[np.ndarray],
     targets_rows: List[int],
     num_classes: int,
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """Mean softmax per video (same spirit as engine_for_finetuning.compute_video)."""
     by_vid = defaultdict(list)
     y_true_by = {}
@@ -66,13 +66,24 @@ def video_level_classification_metrics(
         "video_top3": float(np.mean(top3_hits)),
     }
     y_true_arr = np.array(y_true_list, dtype=np.int64)
+    nan_per_class = [float("nan")] * num_classes
     if num_classes == 2:
+        pos_probs = np.array(y_prob_rows, dtype=np.float64)
+        prob_mat = np.stack([1.0 - pos_probs, pos_probs], axis=1)
         try:
             out["video_auroc"] = float(
-                roc_auc_score(y_true_arr, np.array(y_prob_rows, dtype=np.float64))
+                roc_auc_score(y_true_arr, pos_probs)
             )
         except ValueError:
             out["video_auroc"] = float("nan")
+        try:
+            out["video_auroc_per_class"] = [
+                float(x) for x in roc_auc_score(
+                    y_true_arr, prob_mat, multi_class="ovr", average=None
+                )
+            ]
+        except ValueError:
+            out["video_auroc_per_class"] = list(nan_per_class)
         out["video_f1"] = float(
             f1_score(y_true_arr, np.array(y_pred_list), average="binary", zero_division=0)
         )
@@ -89,6 +100,14 @@ def video_level_classification_metrics(
             )
         except ValueError:
             out["video_auroc"] = float("nan")
+        try:
+            out["video_auroc_per_class"] = [
+                float(x) for x in roc_auc_score(
+                    y_true_arr, prob_mat, multi_class="ovr", average=None
+                )
+            ]
+        except ValueError:
+            out["video_auroc_per_class"] = list(nan_per_class)
         out["video_f1"] = float(
             f1_score(y_true_arr, np.array(y_pred_list), average="macro", zero_division=0)
         )
