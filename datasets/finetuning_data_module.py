@@ -21,6 +21,7 @@ import os
 import torch
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
+from torch.utils.data._utils.collate import default_collate
 from litdata import StreamingDataLoader, StreamingDataset, train_test_split
 from litdata.streaming.cache import Dir
 
@@ -45,6 +46,28 @@ except ImportError:
 def safe_makedir(path):
     if not os.path.exists(path):
         os.makedirs(path)
+
+
+def finetune_video_id_collate_fn(batch):
+    """
+    Collate (video, target, video_id) batches for val/test multi-clip evaluation.
+
+    Ensures video_id is always a list of strings with len == batch size. PyTorch's
+    default_collate returns a bare str when batch_size==1, which breaks video_id[i]
+    indexing in the Lightning module (iterates characters instead of samples).
+    """
+    videos = [sample[0] for sample in batch]
+    targets = [sample[1] for sample in batch]
+    video_ids = []
+    for sample in batch:
+        vid = sample[2] if len(sample) > 2 else None
+        if vid is None:
+            video_ids.append(None)
+        elif isinstance(vid, str):
+            video_ids.append(vid)
+        else:
+            video_ids.append(str(vid))
+    return default_collate(videos), default_collate(targets), video_ids
 
 
 def _parse_eval_config(config):
@@ -323,7 +346,7 @@ class FinetuningDataModule(pl.LightningDataModule):
                 )
                 print(f"Test dataset from {test_dir} (len={len(self.test_dataset)})")
 
-    def _make_loader(self, dataset, shuffle):
+    def _make_loader(self, dataset, shuffle, collate_video_ids=False):
         bs = self.training_config['batch_size']
         kw = dict(
             batch_size=bs,
@@ -331,6 +354,8 @@ class FinetuningDataModule(pl.LightningDataModule):
             num_workers=self.training_config.get('num_workers', 10),
             pin_memory=self.training_config.get('pin_memory', True),
         )
+        if collate_video_ids:
+            kw["collate_fn"] = finetune_video_id_collate_fn
         if isinstance(dataset, StreamingDataset):
             return StreamingDataLoader(dataset, **kw, persistent_workers=False)
         return DataLoader(dataset, **kw)
@@ -343,9 +368,15 @@ class FinetuningDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         if self.val_dataset is None:
             return []
-        return self._make_loader(self.val_dataset, shuffle=False)
+        use_video_id_collate = self._eval_parsed["eval_protocol"] == "multi_clip"
+        return self._make_loader(
+            self.val_dataset, shuffle=False, collate_video_ids=use_video_id_collate
+        )
 
     def test_dataloader(self):
         if self.test_dataset is None:
             return []
-        return self._make_loader(self.test_dataset, shuffle=False)
+        use_video_id_collate = self._eval_parsed["eval_protocol"] == "multi_clip"
+        return self._make_loader(
+            self.test_dataset, shuffle=False, collate_video_ids=use_video_id_collate
+        )
