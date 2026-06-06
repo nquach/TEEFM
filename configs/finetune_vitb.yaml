@@ -100,3 +100,8 @@ checkpoint:
 logging:
   log_dir: "./output/logs_finetune"
   log_freq: 10
+
+# Optional outputs written after training (rank 0)
+output:
+  # test_predictions_csv: "./output/checkpoints_finetune/test_predictions.csv"
+  test_predictions_csv: null  # or pass --test_predictions_csv PATH

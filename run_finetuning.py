@@ -112,6 +112,12 @@ def main():
                         help='Path to YAML configuration file')
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint to resume training from')
+    parser.add_argument(
+        '--test_predictions_csv',
+        type=str,
+        default=None,
+        help='Optional path to write clip-level test predictions CSV after test',
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -229,6 +235,14 @@ def main():
         else:
             if trainer.global_rank == 0:
                 print("Running test step on best checkpoint...")
+            test_predictions_csv = args.test_predictions_csv
+            if test_predictions_csv is None:
+                test_predictions_csv = (config.get("output") or {}).get("test_predictions_csv")
+            if test_predictions_csv:
+                parent = os.path.dirname(test_predictions_csv)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+                model.test_predictions_csv_path = test_predictions_csv
             test_results = trainer.test(model, datamodule=data_module, ckpt_path=best_ckpt)
             test_metrics = test_results[0] if test_results else {}
             _print_eval_auroc_tables(

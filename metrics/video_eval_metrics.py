@@ -5,11 +5,18 @@ Same spirit as engine_for_finetuning.compute_video. NumPy-only for fast tests; L
 converts tensors before calling.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 from collections import defaultdict
 
 import numpy as np
 from sklearn.metrics import roc_auc_score, f1_score
+
+CSV_PREDICTION_COLUMNS = (
+    "video_id",
+    "predicted_label",
+    "ground_truth_label",
+    "predicted_probability",
+)
 
 
 def softmax_np(x: np.ndarray) -> np.ndarray:
@@ -17,6 +24,31 @@ def softmax_np(x: np.ndarray) -> np.ndarray:
     x = x - np.max(x)
     e = np.exp(x)
     return e / e.sum()
+
+
+def clip_level_prediction_rows(
+    video_ids: List[Any],
+    logits_rows: List[np.ndarray],
+    targets_rows: List[int],
+) -> Tuple[List[Dict[str, Any]], int]:
+    """One CSV row per clip: argmax softmax prediction, ground truth, predicted-class prob."""
+    rows: List[Dict[str, Any]] = []
+    skipped = 0
+    for vid, logit, tgt in zip(video_ids, logits_rows, targets_rows):
+        if vid is None:
+            skipped += 1
+            continue
+        probs = softmax_np(np.asarray(logit, dtype=np.float32))
+        pred = int(np.argmax(probs))
+        rows.append(
+            {
+                "video_id": str(vid),
+                "predicted_label": pred,
+                "ground_truth_label": int(tgt),
+                "predicted_probability": float(probs[pred]),
+            }
+        )
+    return rows, skipped
 
 
 def video_level_classification_metrics(

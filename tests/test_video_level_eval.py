@@ -2,7 +2,11 @@
 
 import numpy as np
 
-from metrics.video_eval_metrics import softmax_np, video_level_classification_metrics
+from metrics.video_eval_metrics import (
+    clip_level_prediction_rows,
+    softmax_np,
+    video_level_classification_metrics,
+)
 
 
 def softmax(x):
@@ -55,6 +59,45 @@ def test_two_videos_independent():
     assert m["video_top1"] == 1.0
     assert "video_auroc_per_class" in m
     assert len(m["video_auroc_per_class"]) == 2
+
+
+def test_clip_level_prediction_rows_two_clips():
+    video_ids = ["v1", "v2"]
+    logits = [
+        np.array([1.0, 0.0, 2.0], dtype=np.float32),
+        np.array([0.0, 3.0, 1.0], dtype=np.float32),
+    ]
+    targets = [2, 1]
+    rows, skipped = clip_level_prediction_rows(video_ids, logits, targets)
+    assert skipped == 0
+    assert len(rows) == 2
+
+    probs0 = softmax_np(logits[0])
+    pred0 = int(np.argmax(probs0))
+    assert rows[0]["video_id"] == "v1"
+    assert rows[0]["predicted_label"] == pred0
+    assert rows[0]["ground_truth_label"] == 2
+    assert abs(rows[0]["predicted_probability"] - probs0[pred0]) < 1e-6
+
+    probs1 = softmax_np(logits[1])
+    pred1 = int(np.argmax(probs1))
+    assert rows[1]["video_id"] == "v2"
+    assert rows[1]["predicted_label"] == pred1
+    assert rows[1]["ground_truth_label"] == 1
+    assert abs(rows[1]["predicted_probability"] - probs1[pred1]) < 1e-6
+
+
+def test_clip_level_prediction_rows_skips_missing_video_id():
+    video_ids = ["v1", None]
+    logits = [
+        np.array([2.0, 0.0], dtype=np.float32),
+        np.array([0.0, 2.0], dtype=np.float32),
+    ]
+    targets = [0, 1]
+    rows, skipped = clip_level_prediction_rows(video_ids, logits, targets)
+    assert skipped == 1
+    assert len(rows) == 1
+    assert rows[0]["video_id"] == "v1"
 
 
 def test_video_auroc_per_class_multiclass():

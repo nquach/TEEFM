@@ -7,19 +7,29 @@ schedule-free RAdam/AdamW. Single input (video) -> logits; no mask.
 Optional eval.eval_protocol: multi_clip enables video-level metrics (mean softmax per
 video_id) logged as val_video_* / test_video_* via epoch-end buffers and self.log(..., sync_dist=True).
 
+Optional output.test_predictions_csv: after test, rank 0 writes clip-level predictions CSV.
+
 DDP: each rank aggregates only its clips; for correct global video metrics use single-GPU val
 or ensure clips per video are not split across ranks (see datasets/finetuning_data_module.py).
+Test prediction CSV uses all_gather_object across ranks on rank 0.
 """
 
+import csv
+import os
 from typing import Dict, List, Optional
 
 import torch
+import torch.distributed as dist
 import pytorch_lightning as pl
 import torch.nn.functional as F
 from torchmetrics import Accuracy, F1Score
 from torchmetrics.classification import MulticlassAUROC
 
-from metrics.video_eval_metrics import video_level_classification_metrics
+from metrics.video_eval_metrics import (
+    CSV_PREDICTION_COLUMNS,
+    clip_level_prediction_rows,
+    video_level_classification_metrics,
+)
 from modeling.model_factory import create_videomae_finetune_model
 from optim_factory import build_layer_decay_param_groups
 from optimizers.schedule_free_optimizer import create_schedule_free_optimizer
@@ -95,6 +105,8 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         self._test_vid_ids: List = []
         self._test_logits: List[torch.Tensor] = []
         self._test_targets: List[torch.Tensor] = []
+        output_cfg = config.get("output") or {}
+        self.test_predictions_csv_path = output_cfg.get("test_predictions_csv")
 
     def _build_class_weights(self, distribution: Optional[Dict]) -> Optional[torch.Tensor]:
         if not self.use_class_weights:
@@ -224,13 +236,34 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
                 sync_dist=True,
             )
 
+    def _normalize_video_ids(self, vids, batch_size: int) -> List:
+        if vids is None:
+            return [None] * batch_size
+        if isinstance(vids, str):
+            return [vids]
+        if isinstance(vids, (list, tuple)):
+            out = list(vids)
+            if len(out) < batch_size:
+                out.extend([None] * (batch_size - len(out)))
+            return out[:batch_size]
+        return [vids] + [None] * (batch_size - 1)
+
     def _append_video_clip_buffer(self, split: str, vids, logits, targets):
-        if not self._eval_multi_clip or vids is None:
+        if split == "val":
+            if not self._eval_multi_clip or vids is None:
+                return
+        elif split == "test":
+            if not self._eval_multi_clip and not self.test_predictions_csv_path:
+                return
+        else:
             return
         n = logits.shape[0]
+        vids_list = self._normalize_video_ids(vids, n)
         for i in range(n):
-            vid = vids[i]
-            if vid is None:
+            vid = vids_list[i]
+            if vid is None and split == "val":
+                continue
+            if vid is None and split == "test" and not self.test_predictions_csv_path:
                 continue
             if split == "val":
                 self._val_vid_ids.append(vid)
@@ -343,53 +376,96 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
 
     def on_test_epoch_end(self):
         self._log_per_class_auroc("test")
-        if not self._eval_multi_clip or not self._test_vid_ids:
+        if self._eval_multi_clip and self._test_vid_ids:
+            logits_np = [z.numpy() for z in self._test_logits]
+            targets_int = [int(t.item()) for t in self._test_targets]
+            m = video_level_classification_metrics(
+                self._test_vid_ids,
+                logits_np,
+                targets_int,
+                self.num_classes,
+            )
+            if m:
+                sync = True
+                self.log(
+                    "test_video_top1_acc",
+                    m["video_top1"],
+                    logger=True,
+                    on_epoch=True,
+                    on_step=False,
+                    sync_dist=sync,
+                )
+                self.log(
+                    "test_video_top3_acc",
+                    m["video_top3"],
+                    logger=True,
+                    on_epoch=True,
+                    on_step=False,
+                    sync_dist=sync,
+                )
+                self.log(
+                    "test_video_auroc",
+                    m["video_auroc"],
+                    logger=True,
+                    on_epoch=True,
+                    on_step=False,
+                    sync_dist=sync,
+                )
+                self.log(
+                    "test_video_f1",
+                    m["video_f1"],
+                    logger=True,
+                    on_epoch=True,
+                    on_step=False,
+                    sync_dist=sync,
+                )
+                if "video_auroc_per_class" in m:
+                    self._log_video_per_class_auroc("test", m["video_auroc_per_class"])
+        self._write_test_predictions_csv()
+
+    def _gather_test_prediction_buffers(self):
+        local = (
+            list(self._test_vid_ids),
+            [z.numpy() for z in self._test_logits],
+            [int(t.item()) for t in self._test_targets],
+        )
+        if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
+            gathered = [None] * dist.get_world_size()
+            dist.all_gather_object(gathered, local)
+            if not self.trainer.is_global_zero:
+                return None, None, None
+            all_vids: List = []
+            all_logits: List = []
+            all_targets: List = []
+            for vids, logits, targets in gathered:
+                all_vids.extend(vids)
+                all_logits.extend(logits)
+                all_targets.extend(targets)
+            return all_vids, all_logits, all_targets
+        if not self.trainer.is_global_zero:
+            return None, None, None
+        return local
+
+    def _write_test_predictions_csv(self):
+        path = self.test_predictions_csv_path
+        if not path:
             return
-        logits_np = [z.numpy() for z in self._test_logits]
-        targets_int = [int(t.item()) for t in self._test_targets]
-        m = video_level_classification_metrics(
-            self._test_vid_ids,
-            logits_np,
-            targets_int,
-            self.num_classes,
-        )
-        if not m:
+        gathered = self._gather_test_prediction_buffers()
+        if gathered[0] is None:
             return
-        sync = True
-        self.log(
-            "test_video_top1_acc",
-            m["video_top1"],
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            sync_dist=sync,
-        )
-        self.log(
-            "test_video_top3_acc",
-            m["video_top3"],
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            sync_dist=sync,
-        )
-        self.log(
-            "test_video_auroc",
-            m["video_auroc"],
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            sync_dist=sync,
-        )
-        self.log(
-            "test_video_f1",
-            m["video_f1"],
-            logger=True,
-            on_epoch=True,
-            on_step=False,
-            sync_dist=sync,
-        )
-        if "video_auroc_per_class" in m:
-            self._log_video_per_class_auroc("test", m["video_auroc_per_class"])
+        video_ids, logits_np, targets_int = gathered
+        rows, skipped = clip_level_prediction_rows(video_ids, logits_np, targets_int)
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(CSV_PREDICTION_COLUMNS))
+            writer.writeheader()
+            writer.writerows(rows)
+        if self.trainer.is_global_zero:
+            print(f"Saved test predictions to {path} ({len(rows)} rows)")
+            if skipped:
+                print(f"Warning: skipped {skipped} test clip(s) with missing video_id")
 
     def configure_optimizers(self):
         lr = self.optimizer_config.get("lr", 1e-3)

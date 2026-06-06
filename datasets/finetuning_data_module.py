@@ -47,6 +47,14 @@ def safe_makedir(path):
         os.makedirs(path)
 
 
+def finetune_video_id_collate_fn(batch):
+    """Collate (video, target, video_id) samples; video_id is always a list of strings."""
+    videos = torch.stack([item[0] for item in batch])
+    targets = torch.stack([item[1] for item in batch])
+    video_ids = [item[2] for item in batch]
+    return videos, targets, video_ids
+
+
 def _parse_eval_config(config):
     """Returns dict with eval_protocol, multiclip flags, and crop/grid settings."""
     eval_cfg = config.get("eval") or {}
@@ -323,7 +331,7 @@ class FinetuningDataModule(pl.LightningDataModule):
                 )
                 print(f"Test dataset from {test_dir} (len={len(self.test_dataset)})")
 
-    def _make_loader(self, dataset, shuffle):
+    def _make_loader(self, dataset, shuffle, collate_fn=None):
         bs = self.training_config['batch_size']
         kw = dict(
             batch_size=bs,
@@ -331,6 +339,8 @@ class FinetuningDataModule(pl.LightningDataModule):
             num_workers=self.training_config.get('num_workers', 10),
             pin_memory=self.training_config.get('pin_memory', True),
         )
+        if collate_fn is not None:
+            kw['collate_fn'] = collate_fn
         if isinstance(dataset, StreamingDataset):
             return StreamingDataLoader(dataset, **kw, persistent_workers=False)
         return DataLoader(dataset, **kw)
@@ -348,4 +358,8 @@ class FinetuningDataModule(pl.LightningDataModule):
     def test_dataloader(self):
         if self.test_dataset is None:
             return []
-        return self._make_loader(self.test_dataset, shuffle=False)
+        return self._make_loader(
+            self.test_dataset,
+            shuffle=False,
+            collate_fn=finetune_video_id_collate_fn,
+        )
