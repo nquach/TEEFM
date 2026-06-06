@@ -69,21 +69,3 @@ def test_video_auroc_per_class_multiclass():
     m = video_level_classification_metrics(ids, logits, targets, num_classes=3)
     assert len(m["video_auroc_per_class"]) == 3
     assert all(isinstance(x, float) for x in m["video_auroc_per_class"])
-    assert m["video_num_clips"] == 4
-    assert m["video_num_videos"] == 2
-    assert m["video_num_classes_in_y_true"] == 2
-
-
-def test_video_auroc_error_on_single_class():
-    ids = ["a", "a"]
-    logits = [
-        np.array([2.0, 0.0], dtype=np.float32),
-        np.array([1.0, 0.0], dtype=np.float32),
-    ]
-    targets = [0, 0]
-    m = video_level_classification_metrics(ids, logits, targets, num_classes=2)
-    assert np.isnan(m["video_auroc"])
-    assert "video_auroc_per_class_error" in m
-    assert all(np.isnan(x) for x in m["video_auroc_per_class"])
-    assert m["video_num_videos"] == 1
-    assert m["video_num_classes_in_y_true"] == 1

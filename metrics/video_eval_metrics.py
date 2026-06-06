@@ -19,24 +19,6 @@ def softmax_np(x: np.ndarray) -> np.ndarray:
     return e / e.sum()
 
 
-def _per_class_ovr_auroc(y_true_arr, prob_mat, num_classes: int):
-    """Compute per-class OvR AUROC; return (scores, error_message)."""
-    nan_per_class = [float("nan")] * num_classes
-    try:
-        scores = roc_auc_score(
-            y_true_arr, prob_mat, multi_class="ovr", average=None
-        )
-    except ValueError as exc:
-        return nan_per_class, str(exc)
-    scores_arr = np.atleast_1d(np.asarray(scores, dtype=np.float64))
-    if scores_arr.size != num_classes:
-        return nan_per_class, (
-            f"Expected {num_classes} per-class AUROC scores, got {scores_arr.size} "
-            f"(unique classes in y_true={len(set(y_true_arr.tolist()))})."
-        )
-    return [float(x) for x in scores_arr], None
-
-
 def video_level_classification_metrics(
     video_ids: List[str],
     logits_rows: List[np.ndarray],
@@ -54,13 +36,6 @@ def video_level_classification_metrics(
 
     if not by_vid:
         return {}
-
-    y_true_arr_preview = np.array(list(y_true_by.values()), dtype=np.int64)
-    debug_info = {
-        "video_num_clips": len(video_ids),
-        "video_num_videos": len(by_vid),
-        "video_num_classes_in_y_true": int(len(set(y_true_arr_preview.tolist()))),
-    }
 
     top1_hits = []
     top3_hits = []
@@ -89,7 +64,6 @@ def video_level_classification_metrics(
     out = {
         "video_top1": float(np.mean(top1_hits)),
         "video_top3": float(np.mean(top3_hits)),
-        **debug_info,
     }
     y_true_arr = np.array(y_true_list, dtype=np.int64)
     nan_per_class = [float("nan")] * num_classes
@@ -100,18 +74,16 @@ def video_level_classification_metrics(
             out["video_auroc"] = float(
                 roc_auc_score(y_true_arr, pos_probs)
             )
-        except ValueError as exc:
+        except ValueError:
             out["video_auroc"] = float("nan")
-            out["video_auroc_error"] = str(exc)
         try:
-            out["video_auroc_per_class"], err = _per_class_ovr_auroc(
-                y_true_arr, prob_mat, num_classes
-            )
-            if err:
-                out["video_auroc_per_class_error"] = err
-        except Exception as exc:
+            out["video_auroc_per_class"] = [
+                float(x) for x in roc_auc_score(
+                    y_true_arr, prob_mat, multi_class="ovr", average=None
+                )
+            ]
+        except ValueError:
             out["video_auroc_per_class"] = list(nan_per_class)
-            out["video_auroc_per_class_error"] = str(exc)
         out["video_f1"] = float(
             f1_score(y_true_arr, np.array(y_pred_list), average="binary", zero_division=0)
         )
@@ -126,13 +98,16 @@ def video_level_classification_metrics(
                     average="macro",
                 )
             )
-        except ValueError as exc:
+        except ValueError:
             out["video_auroc"] = float("nan")
-            out["video_auroc_error"] = str(exc)
-        per_class, err = _per_class_ovr_auroc(y_true_arr, prob_mat, num_classes)
-        out["video_auroc_per_class"] = per_class
-        if err:
-            out["video_auroc_per_class_error"] = err
+        try:
+            out["video_auroc_per_class"] = [
+                float(x) for x in roc_auc_score(
+                    y_true_arr, prob_mat, multi_class="ovr", average=None
+                )
+            ]
+        except ValueError:
+            out["video_auroc_per_class"] = list(nan_per_class)
         out["video_f1"] = float(
             f1_score(y_true_arr, np.array(y_pred_list), average="macro", zero_division=0)
         )

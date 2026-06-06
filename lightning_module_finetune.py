@@ -12,7 +12,6 @@ or ensure clips per video are not split across ranks (see datasets/finetuning_da
 """
 
 from typing import Dict, List, Optional
-from collections import Counter
 
 import torch
 import pytorch_lightning as pl
@@ -198,84 +197,6 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
             return batch[0], batch[1].long(), batch[2]
         return batch[0], batch[1].long(), None
 
-    def _normalize_video_ids(self, vids, batch_size: int) -> List:
-        """Ensure video_id batch is a length-batch_size list (handles batch_size==1 str)."""
-        if vids is None:
-            return [None] * batch_size
-        if isinstance(vids, str):
-            if batch_size == 1:
-                return [vids]
-            raise ValueError(
-                "video_id collate returned a bare string for batch_size > 1; "
-                "use finetune_video_id_collate_fn on val/test dataloaders."
-            )
-        if isinstance(vids, (list, tuple)):
-            ids = list(vids)
-            if len(ids) != batch_size:
-                raise ValueError(
-                    f"video_id list length {len(ids)} != batch size {batch_size}"
-                )
-            return ids
-        return [vids if batch_size == 1 else None] * batch_size
-
-    def _log_video_buffer_debug(self, split: str, vid_ids: List, targets_int: List[int]):
-        if self.trainer is None or not self.trainer.is_global_zero:
-            return
-        n_clips = len(vid_ids)
-        unique_ids = set(vid_ids)
-        n_unique = len(unique_ids)
-        clip_class_hist = Counter(targets_int)
-        video_labels = {}
-        for vid, tgt in zip(vid_ids, targets_int):
-            video_labels[vid] = tgt
-        video_class_hist = Counter(video_labels.values())
-        clips_per_video = Counter(vid_ids)
-        avg_clips = (n_clips / n_unique) if n_unique else 0.0
-        print(
-            f"[{split} video-level debug] clips={n_clips}, unique_video_ids={n_unique}, "
-            f"avg_clips_per_video={avg_clips:.2f}, "
-            f"clip_classes={len(clip_class_hist)}, video_classes={len(video_class_hist)}"
-        )
-        print(f"  clip class histogram (top 10): {clip_class_hist.most_common(10)}")
-        print(f"  video class histogram (top 10): {video_class_hist.most_common(10)}")
-        if n_unique < 2:
-            print(
-                f"  WARNING: fewer than 2 unique video_ids on this rank; "
-                "video AUROC may be undefined. Check data.video_id_key."
-            )
-        if len(video_class_hist) < 2:
-            print(
-                f"  WARNING: only {len(video_class_hist)} class(es) at video level on this rank; "
-                "AUROC requires >= 2 classes."
-            )
-        if n_unique and avg_clips < 1.5 and self._eval_multi_clip:
-            print(
-                "  WARNING: avg_clips_per_video < 1.5 under multi_clip; "
-                "clips may not be aggregating per logical video."
-            )
-        top_clip_counts = clips_per_video.most_common(3)
-        if top_clip_counts and top_clip_counts[0][1] > max(6, avg_clips * 3):
-            print(
-                f"  NOTE: most frequent video_id has {top_clip_counts[0][1]} clips "
-                f"(id={top_clip_counts[0][0]!r}); verify video_id_key groups multi-clip views."
-            )
-
-    def _log_video_metrics_debug(self, split: str, metrics: Dict):
-        if self.trainer is None or not self.trainer.is_global_zero:
-            return
-        num_clips = metrics.get("video_num_clips")
-        num_videos = metrics.get("video_num_videos")
-        num_classes = metrics.get("video_num_classes_in_y_true")
-        if num_clips is not None:
-            print(
-                f"[{split} video-level metrics] aggregated clips={num_clips}, "
-                f"videos={num_videos}, classes_in_y_true={num_classes}"
-            )
-        for key in ("video_auroc_error", "video_auroc_per_class_error"):
-            err = metrics.get(key)
-            if err:
-                print(f"  WARNING: {key}: {err}")
-
     def _log_per_class_auroc(self, split: str):
         scores = self.aucroc_per_class.compute()
         for i in range(scores.shape[0]):
@@ -307,9 +228,8 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         if not self._eval_multi_clip or vids is None:
             return
         n = logits.shape[0]
-        video_ids = self._normalize_video_ids(vids, n)
         for i in range(n):
-            vid = video_ids[i]
+            vid = vids[i]
             if vid is None:
                 continue
             if split == "val":
@@ -373,7 +293,6 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
             return
         logits_np = [z.numpy() for z in self._val_logits]
         targets_int = [int(t.item()) for t in self._val_targets]
-        self._log_video_buffer_debug("val", self._val_vid_ids, targets_int)
         m = video_level_classification_metrics(
             self._val_vid_ids,
             logits_np,
@@ -382,7 +301,6 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         )
         if not m:
             return
-        self._log_video_metrics_debug("val", m)
         sync = True
         self.log(
             "val_video_top1_acc",
@@ -429,7 +347,6 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
             return
         logits_np = [z.numpy() for z in self._test_logits]
         targets_int = [int(t.item()) for t in self._test_targets]
-        self._log_video_buffer_debug("test", self._test_vid_ids, targets_int)
         m = video_level_classification_metrics(
             self._test_vid_ids,
             logits_np,
@@ -438,7 +355,6 @@ class VideoMAEFinetuneLightningModule(pl.LightningModule):
         )
         if not m:
             return
-        self._log_video_metrics_debug("test", m)
         sync = True
         self.log(
             "test_video_top1_acc",
